@@ -1,0 +1,39 @@
+{
+  "name": "tracework",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Evidence-backed project planning and controlled software delivery.",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "clean": "turbo run clean",
+    "dev": "turbo run dev --parallel",
+    "docs:validate": "node scripts/validate-docs.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:integration": "turbo run test:integration",
+    "test:e2e": "pnpm --filter @tracework/e2e test",
+    "test:a11y": "pnpm --filter @tracework/e2e test:a11y",
+    "db:generate": "pnpm --filter @tracework/database db:generate",
+    "db:migrate": "pnpm --filter @tracework/database db:migrate",
+    "db:seed": "pnpm --filter @tracework/database db:seed",
+    "demo:reset": "pnpm --filter @tracework/database demo:reset",
+    "backup": "pnpm --filter @tracework/database backup",
+    "restore": "pnpm --filter @tracework/database restore",
+    "runner:recovery": "pnpm --filter @tracework/runner recovery"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.9",
+    "mermaid": "11.12.3",
+    "prettier": "3.9.6",
+    "turbo": "2.10.5",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,20 @@
+packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  esbuild: true
+
+catalog:
+  "@types/node": 24.10.9
+  typescript: 7.0.2
+  vitest: 4.1.10
+  zod: 4.4.3
+
+minimumReleaseAgeExclude:
+  - prettier@3.9.6
+
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
+  - sharp

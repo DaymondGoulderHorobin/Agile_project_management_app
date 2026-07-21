@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "rootDir": ".",
+    "tsBuildInfoFile": "./node_modules/.cache/domain-tests.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}

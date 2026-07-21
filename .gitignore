@@ -1,0 +1,17 @@
+node_modules/
+.pnpm-store/
+.turbo/
+.next/
+dist/
+coverage/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example
+.local/
+tmp/
+*.log
+*.tsbuildinfo
+apps/runner/workspaces/
+apps/runner/patches/

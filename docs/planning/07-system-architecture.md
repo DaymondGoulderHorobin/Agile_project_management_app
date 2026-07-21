@@ -240,7 +240,7 @@ sequenceDiagram
     else Stop or finalise
         Worker->>Runner: Run approved tests/report
         Runner->>GitHub: Commit/PR only if permitted
-        API->>DB: Revoke grant → reporting → awaiting_review; retain claims
+        API->>DB: Revoke grant, report, await review, retain claims
         Worker->>Runner: Cleanup
         API-->>Reviewer: Technical/stakeholder review
         Reviewer->>API: Required outcome decision

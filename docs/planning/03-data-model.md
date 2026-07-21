@@ -23,7 +23,7 @@ Foreign keys between tenant-owned tables use `(organisation_id, referenced_id)` 
 ### Mutable versus immutable records
 
 - Draft containers, assignments, preferences, and workflow instances use optimistic `lock_version`.
-- Submitted evidence, artifact versions, approval snapshots/decisions, execution events, test results, release versions, audit events, and inbox/outbox payloads are append-only.
+- Submitted evidence, artifact versions, approval snapshots/decisions, execution events, test results, demonstration comparison results, release versions, audit events, and inbox/outbox payloads are append-only.
 - Corrections use `supersedes_*_id`; revocation/staleness is represented in owning lifecycle records or separate events.
 
 Origin-bearing records constrain `origin` to `human_authored`, `ai_generated`, `ai_generated_human_edited`, `imported`, or `system_generated`. Accepting or editing an AI proposal creates the appropriate target record with actor attribution plus an immutable provenance link to its `ai_output_id`, prompt/model/schema version and input-manifest lineage; it never converts origin to `human_authored` and can never create an `approval_decision`.
@@ -36,13 +36,15 @@ Approval and important version hashes use SHA-256 over an RFC 8785 canonical JSO
 
 ### Global identity tables
 
+Better Auth `1.6.23` is the selected authentication adapter, with every Better Auth core/plugin package pinned to that same patch. It is mounted directly on Fastify and uses its reviewed Drizzle/PostgreSQL schema with database-backed sessions; cookie session caching is disabled so a database revocation is effective on the next authenticated request. The names below are the application’s canonical logical mappings around the generated Better Auth schema. Migration generation pins and contract-tests the exact physical table/column mapping and enabled magic-link, passkey, and TOTP plugin tables; that mechanical verification is not an unresolved provider-selection decision. Identity repositories convert the verified adapter session into an internal application principal; no application permission or RLS policy queries Better Auth tables directly.
+
 | Table | Important columns and constraints |
 |---|---|
 | `users` | `id`, unique case-folded `email`, `display_name`, `status`, `email_verified_at`, `created_at`, `disabled_at`; no `organisation_id` because identity is global |
 | `auth_accounts` | `user_id`, provider, provider account ID, credential metadata; unique provider/account |
-| `auth_sessions` | hashed/session identifier, `user_id`, expiry, last seen, IP/user-agent metadata, revoked time; indexed by user and expiry |
-| `authenticators` | `user_id`, kind (`passkey`, `totp`), public/verification metadata, created/last-used/revoked times; secret material encrypted |
-| `verification_tokens` | purpose, hashed token, subject, expiry, consumed time; atomic single-use unique constraint |
+| `auth_sessions` | Better Auth database-authoritative session row including its documented lookup token, `user_id`, expiry, creation/update times, IP/user-agent metadata and revocation state supported by the adapter; indexed by user and expiry; browser cookie cache disabled. The lookup token is the explicit narrow exception to digest-only bearer-token storage and receives restricted-column access, encrypted storage/backup controls, redaction, and secret-scanning tests |
+| `authenticators` | Better Auth first-party plugin mappings for `passkey` and `totp`, including public/verification metadata, created/last-used/revoked times; TOTP/recovery secret material encrypted at rest |
+| `verification_tokens` | magic-link/email-verification/recovery purpose, hashed token verifier, subject, expiry, consumed time; magic link config uses `storeToken: 'hashed'`; atomic single-use unique constraint |
 
 ### Organisation/project tables
 
@@ -58,8 +60,11 @@ Approval and important version hashes use SHA-256 over an RFC 8785 canonical JSO
 | `project_memberships` | project, `user_id`, membership type (`member`, `guest`), status, joined/left times; unique active project/user. A guest is a global authenticated user with project-only membership and no implied organisation membership |
 | `project_role_assignments` | membership, role, scope JSON, effective/expiry times |
 | `project_permission_grants` | membership, permission, optional object/stage scope; explicit guest grants |
+| `reauthentication_grants` | organisation, optional project, `user_id`, originating auth session, action key, subject kind/ID and snapshot/content hash, method constrained initially to `passkey_uv`, issued/expires/consumed/revoked times, nonce hash; one-use; `expires_at <= issued_at + interval '15 minutes'`; tenant-aware target FKs |
 
 An invitation token is never stored raw. Acceptance atomically consumes the token and creates/activates the intended membership and audit/outbox records.
+
+Better Auth `updateAge` extends session expiry and is not token rotation. Credential recovery, privilege elevation, and configured security-boundary changes revoke the old database session and require a fresh authenticated session. Passwordless magic-link sign-in is not assumed to invoke TOTP automatically. A High-Assurance command consumes a separate `reauthentication_grants` row created only after a fresh passkey user-verification ceremony; the grant is bound to the exact action and subject/snapshot hash and cannot outlive 15 minutes.
 
 ## Workflow
 
@@ -73,6 +78,8 @@ An invitation token is never stored raw. Acceptance atomically consumes the toke
 | `workflow_transition_events` | instance, from/to state, transition, actor, reason, correlation ID, created time; append-only |
 
 Security/integrity prerequisites are evaluated in application code even when a configured transition exists.
+
+The initial project workflow version constrains state keys to `discovery`, `planning`, `plan_in_review`, `ready_for_backlog`, `delivery`, `release_in_review`, `released`, `on_hold`, and `archived`; seed/configuration validation rejects every unregistered alias.
 
 ## Discovery, knowledge, and evidence
 
@@ -138,7 +145,7 @@ JSONB is appropriate for immutable heterogeneous manifests, model/provider metad
 | `readiness_evaluations` | project, subject kind/version, rule-set version, state, evaluated time, input manifest/hash, optional completion percentage |
 | `readiness_rule_results` | evaluation, rule key, severity (`blocking`, `warning`, `informational`), outcome, explanation, related entity/version IDs JSONB |
 
-Database checks constrain `approval_requests.state` to `pending`, `approved`, `changes_requested`, `rejected`, `withdrawn`, or `stale`; and `approval_decisions.decision` to `approved`, `approved_with_conditions`, `changes_requested`, or `rejected`. Staleness changes the request/snapshot validity state and never rewrites an immutable decision. Revocation appends `approval_revocations`; it is a current-authority invalidation, not an extra request/decision state. A decision must reference the same snapshot and request requirement, and its reviewer membership must belong to the request project/organisation.
+Database checks constrain `approval_requests.state` to `pending`, `approved`, `changes_requested`, `rejected`, `withdrawn`, or `stale`; and `approval_decisions.decision` to `approved`, `approved_with_conditions`, `changes_requested`, or `rejected`. A relevant change marks the approval request `stale` and invalidates the old snapshot’s use as current authority. The immutable snapshot and decisions remain unchanged as historical evidence. Revocation appends `approval_revocations`; it is a current-authority invalidation, not an extra request/decision state. A decision must reference the same snapshot and request requirement, and its reviewer membership must belong to the request project/organisation.
 
 There are no initial-release `legal_signature_*` tables. A future Legal electronic signature module may reference `approval_snapshots` but cannot alter core approval decisions.
 
@@ -170,6 +177,15 @@ There are no initial-release `legal_signature_*` tables. A future Legal electron
 
 AI output remains a proposal until an authorised human creates or edits the target domain record.
 
+### Demonstration comparison
+
+| Table | Important columns and constraints |
+|---|---|
+| `demonstration_comparisons` | project, synthetic scenario key, fixture version, original-idea baseline input object/hash, exact platform-assisted plan/execution/release manifest, state, requested/completed times, lock version; unique project/scenario/fixture version |
+| `demonstration_comparison_results` | comparison, result version, method/schema version, baseline output object/hash, platform output manifest/hash, structured unsupported assumptions, missing requirements/questions/acceptance criteria, corrections, discovered/prevented items, coverage, stakeholder-confidence evidence, traceability metrics, content hash, created time, optional `supersedes_result_id`; immutable; unique comparison/result version and comparison/content hash |
+
+The comparison uses only synthetic `general_business` fixtures in the dedicated demo tenant and fixture repository. It is an evaluation/reporting record: no comparison row, result, or job is an approval, capability, execution plan, or route around Runner Control.
+
 ## Repository integration
 
 | Table | Important columns and constraints |
@@ -192,9 +208,10 @@ AI output remains a proposal until an authorised human creates or edits the targ
 | `execution_plans` | project, stable key/title, work-item grouping, current version navigation pointer |
 | `execution_plan_versions` | plan, version, status, objective, project-plan artifact version, repository, approved commit, branch strategy/name, structured path/network/tool/secret policies, acceptance/test/stop policies, typed limits, review policy, canonical payload/hash; unique plan/version |
 | `execution_cycle_work_items` | cycle, work item, frozen work-item/artifact manifest JSONB; unique cycle/work item |
+| `execution_work_item_claims` | project, work item, execution cycle, `claimed_at`, nullable `released_at`, nullable `release_reason`, created time; tenant-aware cycle/work-item FKs; partial unique `(organisation_id, work_item_id) where released_at is null` |
 | `execution_cycles` | project, execution-plan version, state, stop reason, request idempotency key, current runner environment, started/stopped times, lock version; **unique `execution_plan_version_id`**, unique project/idempotency key |
 
-Limits are typed columns where arithmetic matters: `max_turns`, `max_tasks`, `max_input_tokens`, `max_output_tokens`, `max_cost_minor_units`, `currency`, `max_duration_seconds`. Policy detail remains immutable JSONB with a schema version.
+Limits are typed columns where arithmetic matters: `max_turns`, `max_tasks`, `max_input_tokens`, `max_output_tokens`, `max_cost_minor_units`, `currency`, `max_duration_seconds`. Policy detail remains immutable JSONB with a schema version. Process cancellation uses validated operator configuration `runner_graceful_shutdown_seconds`, default `30`, minimum `5`, maximum `120`; the effective value is copied to cancellation audit/report metadata, but capability and secret revocation remain immediate.
 
 ### Capability and environment
 
@@ -222,8 +239,12 @@ Limits are typed columns where arithmetic matters: `max_turns`, `max_tasks`, `ma
 - `execution_cycles.state` is constrained to `requested`, `authorising`, `queued`, `provisioning`, `running`, `checkpoint_waiting`, `human_input_required`, `testing`, `reporting`, `awaiting_review`, `completed`, `cancelling`, `cancelled`, `failed`, or `recovery_required`.
 - `runner_environments.state` is constrained to `requested`, `creating`, `ready`, `active`, `revoking`, `destroying`, `destroyed`, or `cleanup_failed`.
 - `execution_cycles.stop_reason`, when present, is constrained to `checkpoint_reached`, `human_input_required`, `scope_violation`, `token_limit`, `cost_limit`, `turn_limit`, `task_limit`, `time_limit`, `tests_failed`, `approval_revoked`, `membership_revoked`, `repository_access_lost`, `material_change`, `user_cancelled`, `runner_crash`, or `completed`.
-- A `completed` cycle requires `stop_reason = completed`, an immutable current work report, required completed test records, satisfied review policy, revoked capability grants, and no non-destroyed environment. Failed tests, limit stops, partial reports, checkpoints, active cancellation, or outstanding reviews cannot satisfy the completion command.
-- A `cancelled` cycle requires no valid capability/secret lease and no non-destroyed environment; a cancellation before provisioning may have no environment row.
+- `execution_work_item_claims.released_at IS NULL` means active. A partial unique index on `(organisation_id, work_item_id) WHERE released_at IS NULL` is authoritative; `released_at` and `release_reason` are set once by an explicit release command and never cleared.
+- Claim acquisition inserts the complete selected work-item set in the authority transaction. A uniqueness conflict aborts the transaction and leaves no partial claim set. Active claims remain held in `queued`, `provisioning`, `running`, `checkpoint_waiting`, `human_input_required`, `testing`, `reporting`, `awaiting_review`, and `recovery_required`.
+- Allowed claim release reasons are `required_review_completed`, `safely_cancelled`, `authorised_failure_recovery`, and `authorised_change_removed_work`. Failure recovery additionally requires proven capability/secret revocation and environment containment; change removal additionally requires the affected cycle to be safely cancelled/contained. `recovery_required`, process exit, runner cleanup, or timeout alone cannot release a claim.
+- A `completed` cycle requires `stop_reason = completed`, an immutable current work report, required completed test records, satisfied review policy, revoked capability grants, no non-destroyed environment, and no active work-item claim for the cycle. Failed tests, limit stops, partial reports, checkpoints, active cancellation, or outstanding reviews cannot satisfy the completion command.
+- A `cancelled` cycle requires no valid capability/secret lease, no non-destroyed environment, and release of its claims with `safely_cancelled`; a cancellation before provisioning may have no environment row.
+- A `recovery_required` cycle retains every active claim. A failed cycle may release claims only when an immutable authorised recovery decision records `authorised_failure_recovery`; failure state or runner cleanup alone is insufficient.
 - Capability expiry must be later than issue time; revoked grants cannot become active again; a renewal references a grant for the same cycle/environment and is created only after an authority check.
 - Environment timestamps are monotonic; `destroyed_at` is required only for `destroyed`. `cleanup_failed` requires revoked secret leases/capabilities and safe error metadata.
 - Agent/action/checkpoint/test/report/review rows must reference the same cycle and organisation through composite FKs. Action policy decisions are constrained to `allowed` or `denied`; a denial has no successful external-effect completion.
@@ -277,9 +298,11 @@ Audit tables are partition candidates by time once volume warrants it. Ordinary 
 ## Other lifecycle checks used by the product journey
 
 - `projects.status`: `active`, `archived`, or `deletion_pending`. Creation commits directly to `active`; no partially created project is exposed.
+- `project_workflow_instances.current_state` uses only `discovery`, `planning`, `plan_in_review`, `ready_for_backlog`, `delivery`, `release_in_review`, `released`, `on_hold`, or `archived`.
 - `organisation_memberships.status` and `project_memberships.status`: `active`, `revoked`, or `left`. An invitation is separate; acceptance atomically creates/activates membership. Invitation state is derived as `issued`, `consumed`, `revoked`, or `expired` from immutable token metadata/timestamps.
 - `questions.status`: `draft`, `open`, `closed`, or `archived`; `question_assignments.status`: `assigned`, `viewed`, `completed`, or `revoked`.
 - `ai_jobs.state`: `requested`, `filtering`, `queued`, `running`, `completed`, `refused`, `failed`, `cancelling`, or `cancelled`. `ai_outputs.proposal_state`: `proposed`, `accepted`, `edited_and_accepted`, `dismissed`, or `expired`; only a recorded human action can leave `proposed` for an accepted state.
+- `demonstration_comparisons.state`: `requested`, `running`, `completed`, `failed`, or `cancelled`. Only `completed` points to an immutable current `demonstration_comparison_results` row; regenerating creates a superseding result version.
 - `readiness_evaluations.state`: `requested`, `running`, `passed`, `blocked`, or `failed`; every terminal evaluation has immutable rule results and input hash.
 - `work_items.status`: `proposed`, `accepted`, `ready`, `in_progress`, `blocked`, `done`, or `cancelled`. `iterations.state`: `draft`, `planned`, `approval_pending`, `approved`, `ready`, `active`, `completed`, or `cancelled`.
 - `project_repositories.status`: `pending`, `active`, `access_lost`, or `revoked`. An approved execution may use only `active` with a fresh `repository_access_snapshot`.
@@ -297,7 +320,7 @@ These value checks do not alone authorise transitions. Every transition uses the
 - Versions: unique parent/version and parent/hash; descending parent/version for history.
 - Evidence graph: both `(organisation_id, source_fragment_id)` and `(organisation_id, artifact_version_id)`.
 - Approval work: `(organisation_id, state, requested_at)`, reviewer/requirement lookup, snapshot hash.
-- Runner: unique execution-plan version, `(organisation_id, state, created_at)`, cycle/sequence indexes, active capability/environment partial indexes.
+- Runner: unique execution-plan version, partial unique active work-item claim `(organisation_id, work_item_id)`, `(organisation_id, state, created_at)`, cycle/sequence indexes, active capability/environment partial indexes.
 - Outbox: partial `(available_at, id)` where undelivered; inbox unique source/external ID.
 - Webhooks: unique provider/delivery ID and processing-state/received-time.
 - Audit: `(organisation_id, occurred_at desc)`, project/time, aggregate/type/time, correlation ID.
@@ -319,12 +342,13 @@ These value checks do not alone authorise transitions. Every transition uses the
 - Draft submission plus immutable response/source/fragment creation.
 - Artifact-version creation plus typed extension, relationships, audit, and outbox.
 - Approval request opening plus snapshot and evaluated requirements.
-- Approval decision plus request-state recalculation, audit, and notifications/outbox.
+- Approval decision plus atomic validation/consumption of any required action/snapshot-bound `reauthentication_grant`, request-state recalculation, audit, and notifications/outbox.
 - Approval revocation plus current-validity invalidation, affected-cycle cancellation intent, audit, and outbox; historical decisions remain unchanged.
 - Staleness marking plus replacement linkage and affected-cycle cancellation intent.
 - Work-item/sprint commitment where dependency/order invariants must be consistent.
-- Cycle creation unique claim and request idempotency record.
-- Authority recheck, logical `runner_environments` row in `requested`, `authorising → queued`, capability grant metadata bound to that row, audit, and outbox.
+- Cycle creation unique execution-plan-version reservation and request idempotency record; this is distinct from active work-item claims.
+- Authority recheck, atomic acquisition of the complete `execution_work_item_claims` set, logical `runner_environments` row in `requested`, `authorising → queued`, capability grant metadata bound to that row, audit, and outbox. Any claim conflict rolls the whole transaction back and authorisation returns a safe `409` identifying only the caller-authorised conflicting work item.
+- Claim release plus authorised release decision/reason, cycle transition where applicable, audit, and outbox. Required-review completion, safe cancellation, authorised failed-cycle recovery, and authorised change removal are the only release commands; recovery-required never releases automatically.
 - Every cycle/environment transition with expected state/`lock_version`, audit, and outbox.
 - Atomic usage increment and limit decision.
 - Test/report/review transition units.
@@ -335,7 +359,7 @@ External API/object/runner operations occur after commit from durable intent. Co
 
 ## Retention, archival, and deletion
 
-- Plans, versions, evidence, approval decisions, execution history, releases, and audit events are archived rather than ordinarily deleted while the organisation is active.
+- Plans, versions, evidence, approval decisions, execution history/claims, demonstration comparison results, releases, and audit events are archived rather than ordinarily deleted while the organisation is active.
 - Mutable drafts and transient notifications may use configurable shorter retention.
 - Accepted artifacts, structured actions, usage, final reports, decisions, and release evidence remain for project history.
 - Encrypted raw AI prompt/output objects default to 90 days; raw runner command/log objects default to 30 days. Organisation policy may shorten or extend within operator/legal limits.
@@ -368,6 +392,8 @@ erDiagram
     work_items ||--o{ iteration_work_items : selected
     execution_plans ||--o{ execution_plan_versions : versions
     execution_plan_versions ||--o| execution_cycles : authorises
+    work_items ||--o{ execution_work_item_claims : exclusively_claimed
+    execution_cycles ||--o{ execution_work_item_claims : holds
     execution_cycles ||--o{ runner_capability_grants : grants
     execution_cycles ||--o{ runner_environments : provisions
     execution_cycles ||--o{ agent_runs : contains
@@ -382,6 +408,8 @@ erDiagram
     change_proposals ||--o{ change_proposal_versions : versions
     change_proposal_versions ||--o{ change_impact_evaluations : assessed_by
     change_impact_evaluations ||--o{ change_impact_entries : identifies
+    projects ||--o{ demonstration_comparisons : evaluates
+    demonstration_comparisons ||--o{ demonstration_comparison_results : versions
     releases ||--o{ release_versions : versions
     release_versions ||--o{ release_requirements : includes
 ```
@@ -390,6 +418,8 @@ erDiagram
 
 - Migration tests prove every tenant FK rejects a cross-organisation target.
 - RLS tests cover missing context, wrong tenant, wrong project membership, guest scope, workers, and administrative operations.
-- Check constraints cover enums, exclusive principal fields, positive limits, time ordering, and immutable-state transitions enforced by the application.
-- Unique constraints prove one cycle per execution-plan version, one webhook delivery, one idempotent command result, and non-duplicated external side-effect intent.
+- Database check constraints cover persisted enums, canonical project state `plan_in_review`, exclusive principal fields, positive persisted limits, time ordering, and immutable-state transitions enforced by the application. Configuration-schema tests separately enforce the `5`–`120` graceful-shutdown bound.
+- Unique/race tests prove one cycle per execution-plan version, one active work-item claim per organisation/work item with all-or-nothing multi-claim acquisition, one webhook delivery, one idempotent command result, and non-duplicated external side-effect intent.
 - Tests compare canonical payload/hash fixtures across TypeScript and PostgreSQL-facing representations.
+- Authentication migration/contract tests pin Better Auth core/plugins to `1.6.23`, prove cookie caching is disabled, magic-link `storeToken: 'hashed'`, session revocation, recovery/privilege-boundary session replacement, passkey-UV grant binding/one-use/15-minute expiry, and redaction/access controls around the documented database session lookup token.
+- The repository-level `pnpm docs:validate` CI gate verifies schema/table/state/enum names referenced by the dossier, including `execution_work_item_claims`, `plan_in_review`, immutable-snapshot/approval-request-staleness terminology, and runner lifecycle values.

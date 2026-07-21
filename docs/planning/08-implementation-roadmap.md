@@ -11,6 +11,7 @@ Delivery model: six vertical, demonstrable product slices
 - AI is never accepted as correct without proposal status, evidence validation, human review, and evaluation coverage.
 - The Legal electronic signature module is not part of any initial slice.
 - Each slice has one demo checkpoint; [Demo Journey](13-demo-journey.md) accumulates across slices.
+- Repository CI runs repeatable documentation validation for links, Mermaid syntax where practical, unique requirement/backlog IDs, referenced requirement/demo IDs, canonical states/enums, accidental initial Legal electronic signature dependencies, Markdown formatting, and trailing whitespace.
 
 ## Slice 1 — Secure project foundation (`EPIC-S1`)
 
@@ -20,14 +21,14 @@ A user can securely create an organisation and project, invite a full member, an
 
 ### User journeys
 
-- Register/sign in, create organisation, create Light-mode `general_business` project.
+- Register/sign in through Better Auth magic link or passkey, create organisation, create Light-mode `general_business` project.
 - Invite/accept a member invitation.
 - View personal inbox, organisation dashboard, project overview, and members.
 - Revoke membership/session and observe immediate access loss.
 
 ### Requirements delivered
 
-`FR-001`–`FR-004`, `FR-043`, `SEC-001`–`SEC-005`, `SEC-008`–`SEC-012`, `NFR-001`–`NFR-005`, `NFR-009`–`NFR-010`, foundation for `SC-12` and `SC-14`.
+`FR-001`–`FR-004`, `FR-043`, `FR-045`, `SEC-001`–`SEC-005`, `SEC-008`–`SEC-012`, `NFR-001`–`NFR-005`, `NFR-009`–`NFR-011`, foundation for `SC-12` and `SC-14`.
 
 ### Domain modules
 
@@ -35,7 +36,7 @@ Identity, Organisations, Projects, Platform Reliability, initial Collaboration, 
 
 ### Database changes
 
-- Identity/session/authenticator/verification tables.
+- Better Auth user/account/database-backed session/verification/passkey/TOTP tables mapped through the reviewed Drizzle/PostgreSQL schema, plus tenant-aware one-use `reauthentication_grants`; application principal and authorisation records remain separate.
 - `organisations`, organisation/project memberships and role/grant tables.
 - `projects` with project mode and `general_business` classification.
 - `invitations`, `audit_events`, `outbox_events`, `inbox_events`, `idempotency_records`.
@@ -43,7 +44,7 @@ Identity, Organisations, Projects, Platform Reliability, initial Collaboration, 
 
 ### API contracts
 
-- Authentication/session/revocation endpoints.
+- Better Auth authentication/session/revocation endpoints mounted directly on Fastify; authenticated requests convert the verified Better Auth session into the internal application principal used by NestJS application services. A separate command issues a one-use, action/exact-subject-or-snapshot-bound `reauthentication_grant` after passkey user verification.
 - Organisation/project/member/invitation commands and reads.
 - `/api/v1` error, idempotency, pagination, optimistic concurrency, audit-event contracts.
 - Project event SSE foundation.
@@ -64,6 +65,7 @@ None. Define provider ports/config validation only if needed by repository archi
 
 - Missing/wrong tenant context, IDOR, cross-tenant FK, membership revocation.
 - Token hashing/single-use/expiry, session rotation/revocation, CSRF/origin, rate limit.
+- Database-backed Better Auth session freshness, magic-link `storeToken: "hashed"` and single use, passkey/TOTP enrolment/recovery, immediate revocation with cookie caching off, app-owned action/snapshot-bound step-up grants (one use, no more than 15 minutes), and internal-principal conversion. Treat Better Auth `updateAge` as expiry renewal, not token rotation; recovery/privilege changes revoke the old session and require full reauthentication. The database session lookup token is a documented narrow storage exception: restrict DB access, redact logs/exports/backups and apply encryption at rest rather than claiming it is hashed.
 - Safe audit metadata and secret/config validation.
 
 ### Automated tests
@@ -71,8 +73,10 @@ None. Define provider ports/config validation only if needed by repository archi
 - Domain permission/membership invariants.
 - PostgreSQL integration tests with real RLS application role.
 - API contract and idempotency tests.
+- Better Auth magic-link hashing, passkey/TOTP, action/snapshot-bound recent-reauthentication grants, forced session replacement after recovery/privilege changes, revocation, cookie-cache-off behaviour, CSRF/trusted-origin, Fastify boundary, sensitive session-token redaction, and internal-principal adapter tests. Tests explicitly prove `updateAge` alone is not rotation.
 - Playwright organisation/project/invite flows at desktop/mobile.
 - Accessibility scans and keyboard path.
+- Documentation validation through the same command used in CI.
 
 ### Manual verification
 
@@ -88,15 +92,15 @@ A user securely creates an organisation/project, invites a member, and accesses 
 
 ### Dependencies
 
-The preserved stack is sufficient for repository/tooling work. `OQ-ID-01` must be resolved before the identity adapter and authenticated journeys are accepted; SMTP credentials are needed only for delivery integration tests.
+The preserved stack is sufficient for repository/tooling work. Better Auth `1.6.23` is the selected self-hosted authentication implementation under `ADR-025`; all Better Auth packages use that exact patch, its official Fastify handler is mounted directly, and neither the community NestJS integration nor Better Auth organisation plugin is used. SMTP credentials are needed only for production delivery integration tests, and future OIDC/SAML/SCIM providers remain behind the internal identity adapter.
 
 ### Human decisions required
 
-Identity/OIDC implementation and session policy (`OQ-ID-01`), plus approval of the first tenancy/RLS threat model, block the Slice 1 security exit. Product name/domain, initial SMTP production provider, operator backup targets, and final GitHub repository conventions do not block local foundation work.
+Approval of the Better Auth configuration/session policy and the first tenancy/RLS threat model blocks the Slice 1 security exit; the authentication-library selection itself is closed. Product name/domain, initial SMTP production provider, operator backup targets, and final GitHub repository conventions do not block local foundation work.
 
 ### Architectural risks
 
-Auth integration at Fastify, RLS context leakage through pooling, over-broad admin roles, and premature generic module infrastructure.
+Better Auth schema/version drift, the database-held session lookup token exception, Fastify cookie/origin integration, passwordless-to-MFA/step-up policy gaps, RLS context leakage through pooling, over-broad admin roles, and premature generic module infrastructure.
 
 ### Verification burden
 
@@ -104,7 +108,7 @@ High: tenancy/auth form the security base for every later slice.
 
 ### Mechanically implementable Codex work
 
-Workspace configuration, typed config, standard controllers/forms, Drizzle mappings after reviewed schema, test fixtures, CI tasks, and documentation. Human review is required for auth/RLS/permission/migration logic.
+Workspace configuration, typed config, Better Auth/Drizzle mappings after reviewed schema, standard controllers/forms, test fixtures, CI and documentation-validation tasks. Human review is required for auth/RLS/permission/migration logic.
 
 ## Slice 2 — Human knowledge discovery (`EPIC-S2`)
 
@@ -203,7 +207,7 @@ The team generates, reviews, corrects, and operationally approves an evidence-ba
 - AI proposes requirements, assumptions, risks, and acceptance criteria from selected evidence.
 - Humans inspect evidence, edit/confirm proposals, record decisions, and create a plan version.
 - Readiness explains missing inputs/conflicts/approvers.
-- Required reviewers see exact version/diff and decide; changes make approvals stale.
+- Required reviewers see exact version/diff and decide; a relevant change marks the approval request `stale` and invalidates the unchanged immutable snapshot's use as current authority.
 
 ### Requirements delivered
 
@@ -368,7 +372,7 @@ Codex completes one approved restricted unit of work, stops at a checkpoint, run
 
 ### Requirements delivered
 
-`FR-030`–`FR-038`, all `RUN-001`–`RUN-012`, `UX-013`–`UX-016`, `SC-06`–`SC-09`, execution portion of `SC-10`.
+`FR-030`–`FR-038`, all `RUN-001`–`RUN-013`, `DEMO-001`, `UX-013`–`UX-016`, `SC-06`–`SC-09`, execution portion of `SC-10`.
 
 ### Domain modules
 
@@ -376,15 +380,15 @@ Repository Integration, Execution Control, Runner Control, Testing, Approvals, A
 
 ### Database changes
 
-GitHub integrations/installations/repositories/access/webhook inbox; all execution-plan/cycle/capability/environment/agent/checkpoint/usage/test/report/review/code-change tables in [Data Model](03-data-model.md).
+GitHub integrations/installations/repositories/access/webhook inbox; all execution-plan/cycle/capability/environment/agent/checkpoint/usage/test/report/review/code-change tables in [Data Model](03-data-model.md), including `execution_work_item_claims` and the partial unique active-claim constraint. Demo-only `demonstration_comparisons` and immutable `demonstration_comparison_results` store non-authoritative evaluation evidence.
 
 ### API contracts
 
-GitHub installation/repository mapping; execution plan/version/approval/cycle; cancel/pause/checkpoint decision; event SSE; report/activity/test/code/review; runner internal capability/event/control contracts.
+GitHub installation/repository mapping; execution plan/version/approval/cycle; atomic work-item claim conflict/authorised release; cancel/pause/checkpoint decision; event SSE; report/activity/test/code/review; demonstration comparison query/report; runner internal capability/event/control contracts. A claim conflict returns the cycle to `requested` after rollback, with denial audit/outbox written idempotently in a separate transaction and no capability/environment.
 
 ### Screens
 
-Repository settings, execution-plan editor/review, cycle status/plain summary, technical activity, scope/limits, checkpoint/human input, changed files/diff, tests, work report, technical/stakeholder reviews.
+Repository settings, execution-plan editor/review, cycle status/plain summary, technical activity, scope/limits, checkpoint/human input, changed files/diff, tests, work report, technical/stakeholder reviews, and a read-only Direct-to-Codex versus platform-assisted demonstration results screen.
 
 ### Background jobs
 
@@ -396,15 +400,17 @@ Codex SDK execution and structured report generation. General AI may summarise b
 
 ### Security checks
 
-Approval/membership/repository recheck, opaque capability hash/scope/expiry/revocation, rootless isolation, exact commit/branch, real-path/symlink scope, default-deny network, tool/secret policy, atomic limits, event redaction/authentication, cancellation/hard kill/cleanup.
+Approval/membership/repository recheck, atomic active work-item claim acquisition, claim retention through checkpoint/input/testing/reporting/required review/recovery, release only as `required_review_completed`, `safely_cancelled`, `authorised_failure_recovery`, or `authorised_change_removed_work`, opaque capability hash/scope/expiry/revocation, rootless isolation, exact commit/branch, real-path/symlink scope, default-deny network, tool/secret policy, atomic limits, event redaction/authentication, and cancellation/hard kill/cleanup. Validated configuration sets `runner_graceful_shutdown_seconds = 30` by default and accepts only 5–120 seconds.
 
 ### Automated tests
 
 - Full canonical state-machine and transaction/outbox assertions.
 - Duplicate request/job/webhook/branch/commit/PR tests.
+- Concurrent overlapping-work authorisations permit exactly one active `execution_work_item_claims` row; duplicate, cancellation, review-completion, explicit work removal, failure/recovery-release, and `recovery_required` retention cases assert audit/outbox atomicity (`RUN-013`).
 - Approval/member/repository/material-change revocation before/during run.
 - Blocked file/symlink/network/tool/secret and limit tests.
-- Crash before/after side effects, test failure, human input, cancellation timeout, cleanup failure/manual reconciliation.
+- Crash before/after side effects, test failure, human input, cancellation at the default/configured grace boundary, configuration min/max rejection, cleanup failure/manual reconciliation.
+- Controlled comparison fixtures hold the original idea/repository/base commit/model/limits constant and verify unsupported assumptions, missing requirements/questions/criteria, stakeholder corrections, confidence, and evidence-to-code-to-test coverage (`DEMO-001`).
 - Plain/technical UX, SSE resume, no false completion, mobile/a11y.
 
 ### Manual verification
@@ -413,11 +419,11 @@ Run the demo repo through happy path plus each failure in the runner matrix. Ins
 
 ### Demo checkpoint
 
-Complete `DJ-15`–`DJ-20`: execution-plan approval, restricted Codex work, checkpoint, tests/report/PR as permitted, developer and stakeholder review.
+Complete `DJ-15`–`DJ-20`: execution-plan approval, restricted Codex work, checkpoint, tests/report/PR as permitted, developer and stakeholder review. Capture the isolated Direct-to-Codex baseline and render the partial comparison; Slice 6 supplies the final release-trace result.
 
 ### Exit criteria
 
-Codex completes an approved restricted unit, cannot exceed scope, stops at checkpoint/limits, handles revocation/cancel/crash safely, destroys its environment, and returns evidence for required human review.
+Codex completes an approved restricted unit, cannot exceed scope, cannot overlap an actively claimed work item, stops at checkpoint/limits, handles revocation/cancel/crash safely, destroys its environment, retains claims through required review/recovery, and returns evidence for human review. The controlled baseline comparison is reproducible and cannot be represented as approved or releasable work.
 
 ### Dependencies
 
@@ -429,7 +435,7 @@ Initial self-host runner technology/image, operator maximum limits/egress, GitHu
 
 ### Architectural risks
 
-Runner escape, cancellation race, capability leak, repository side-effect duplication, event/redaction loss, unbounded cost, hostile tests/dependencies, cleanup failure.
+Runner escape, cancellation/claim-release race, capability leak, repository side-effect duplication, event/redaction loss, unbounded cost, hostile tests/dependencies, cleanup failure, and biased/non-reproducible baseline comparison.
 
 ### Verification burden
 
@@ -451,6 +457,7 @@ The system safely processes a material change and produces an approved release r
 - System calculates affected versions, approvals, work, cycles, and release evidence.
 - Team creates/reapproves versions and, where needed, performs another cycle.
 - Release readiness verifies requirements, tests, reviews, limitations, risks, and approval.
+- Team views the final Direct-to-Codex versus platform-assisted comparison with both immutable result sets and the complete platform trace.
 
 ### Requirements delivered
 
@@ -470,11 +477,11 @@ Change propose/classify/impact/approve/apply; release create/version/readiness/s
 
 ### Screens
 
-Change proposal/impact, affected approvals/work/cycles, release builder/readiness/review, evidence chain, limitations/risks, audit/export/retention views.
+Change proposal/impact, affected approvals/work/cycles, release builder/readiness/review, evidence chain, limitations/risks, final demonstration comparison, audit/export/retention views.
 
 ### Background jobs
 
-Impact traversal, staleness/cancellation orchestration, release verification, notifications, export/deletion, retention purge, backup status/reconciliation.
+Impact traversal, approval-request staleness/cancellation orchestration, release verification, immutable demonstration-comparison finalisation, notifications, export/deletion, retention purge, backup status/reconciliation.
 
 ### AI functions
 
@@ -486,7 +493,7 @@ Conservative classification/downgrade audit, atomic/durable change application, 
 
 ### Automated tests
 
-All three change classes, impact graph, unrelated vs affected active cycle, approval invalidation, release evidence completeness, end-to-end trace, export/purge/backup/restore, full demo regression, performance/accessibility/security suite.
+All three change classes, impact graph, unrelated vs affected active cycle, approval-request invalidation, release evidence completeness, end-to-end trace, immutable/fair baseline comparison, export/purge/backup/restore, full demo regression, performance/accessibility/security suite.
 
 ### Manual verification
 
@@ -494,7 +501,7 @@ Perform material demo change, verify cycle stop/new approval, build release, ins
 
 ### Demo checkpoint
 
-Complete `DJ-21`–`DJ-22`: change/review decision where needed and final release record with full evidence chain.
+Complete `DJ-21`–`DJ-22`: change/review decision where needed, final release record with full evidence chain, and the completed Direct-to-Codex versus platform-assisted report defined by `DEMO-001`.
 
 ### Exit criteria
 

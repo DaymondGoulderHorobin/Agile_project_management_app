@@ -15,11 +15,11 @@ Initial data classification: `general_business`
 ## Assets
 
 - Organisation/project knowledge, evidence, requirements, designs, and attachments.
-- Membership, roles, policies, invitations, sessions, and authenticators.
+- Membership, roles, policies, invitations, Better Auth database sessions, passkey/TOTP authenticators, and internal application principals.
 - Immutable approval snapshots/decisions and readiness results.
 - GitHub installations, repository access, branches, code changes, and PR/test evidence.
 - AI prompts/outputs, model profiles, usage/cost, and provider credentials.
-- Runner capabilities, workspaces, secrets, actions, reports, and preserved patches.
+- Runner capabilities, exclusive active work-item claims, workspaces, secrets, actions, reports, and preserved patches.
 - Release evidence, audit events, inbox/outbox records, encryption keys, and backups.
 - Availability and integrity of the self-hosted platform.
 
@@ -72,12 +72,13 @@ The runner boundary is hostile-code-sensitive: checked-out repositories, build s
 | AI prompt injection/data leakage | Evidence instructs model to exfiltrate | Treat content as data, minimal source bundle, tool allowlists, no tenant-wide retrieval, output validation |
 | Runner escape/scope breach | Symlink path escape, network exfiltration, hostile build | Rootless isolated runtime, real-path enforcement, read-only mounts, default-deny egress, capability/secret checks |
 | Duplicate/non-idempotent work | Repeated cycle, PR, email, cleanup | Unique constraints, idempotency records, durable intent, inbox/outbox, reconciliation |
+| Overlapping execution | Two plan versions modify the same work item concurrently | Atomic `execution_work_item_claims`, partial unique active-claim index, claim retention through review/recovery |
 | Data loss/operator failure | Bad migration, backup unusable | Reviewed migrations, expand/contract, encrypted backups, restore tests, health/metrics/runbooks |
 
 ## Severity calibration
 
 - **Critical:** cross-tenant bulk disclosure; runner escape to host/other tenants; arbitrary capability issuance; approval bypass that starts broad Codex work; encryption-key compromise with accessible data.
-- **High:** project guest privilege escalation; stale approval starts scoped execution; GitHub token theft; persistent stored XSS; secret disclosure; backup restore bypassing tenant access.
+- **High:** project guest privilege escalation; a `stale` approval request is accepted as authority for scoped execution; GitHub token theft; persistent stored XSS; secret disclosure; backup restore bypassing tenant access.
 - **Medium:** limited same-project information exposure; non-destructive webhook replay; audit gaps without authority bypass; denial of service within bounded tenant quotas.
 - **Low:** non-sensitive metadata disclosure, safe UI inconsistency, or missing hardening that cannot cross a trust boundary.
 
@@ -85,13 +86,17 @@ Severity depends on reachability and deployment. A container escape is particula
 
 ## Authentication and session security
 
-- Better Auth is mounted at the Fastify boundary using the Drizzle adapter; application modules consume an internal authenticated-principal contract rather than framework-specific session data.
-- Use database-backed secure, `HttpOnly`, SameSite cookies; rotate session IDs at authentication/privilege change.
-- Magic/invitation tokens are high-entropy, hashed, single-use, expiring, rate-limited, and atomically consumed.
-- Passkey/TOTP supports recent reauthentication for High-Assurance operational approval and sensitive administration.
+- Better Auth `1.6.23` is the selected self-hosted authentication adapter; all Better Auth core/plugin packages use exactly that patch. It is mounted directly on the Fastify boundary using its Drizzle/PostgreSQL integration. No community NestJS guard or Better Auth organisation plugin is in the trust/authorisation path.
+- Sessions are database-backed and cookies are secure, `HttpOnly`, and SameSite. Better Auth cookie caching is disabled so revoke-one/revoke-all, account disablement, and assurance changes take effect on the next authenticated request rather than waiting for a cached session payload.
+- Magic-link sign-in is the initial passwordless path and configures `storeToken: 'hashed'`. Magic/invitation/verification tokens are high-entropy, single-use, expiring, rate-limited, and atomically consumed using secure verifiers.
+- Passkey and TOTP use first-party plugins, but passwordless sign-in is not assumed to invoke a TOTP challenge. A High-Assurance command instead consumes an app-owned, one-use `reauthentication_grant`, bound to its action and exact subject/snapshot hash, issued after fresh passkey user verification, and expiring within 15 minutes.
+- Better Auth `updateAge` is expiry renewal, not token rotation or step-up. At authentication recovery, privilege boundary, or other configured security transition, revoke the old session and require a fresh authenticated session; fixation tests prove the pre-boundary identifier cannot retain authority.
+- Better Auth’s documented database session lookup token has no documented hashing option. It is a narrow accepted exception: restrict table/column access, encrypt database volumes/backups, redact telemetry/exports/support bundles, prevent browser/API disclosure, rotate the Better Auth secret under runbook, and cover it with secret-scanning/exfiltration tests. Do not generalise this exception to invitations, magic links, reauthentication grants, or runner capabilities.
+- Verified Better Auth user/session/assurance data is converted to an internal application principal. The permission service, project roles, approval eligibility, and PostgreSQL RLS remain application-owned and do not trust provider roles.
 - Session inventory and revoke-one/revoke-all are available to users/admins under policy.
 - Email address changes, authenticator changes, recovery, and role escalation create high-signal audit/security notifications.
 - No browser token is stored in local storage.
+- Future OIDC, SAML, and SCIM support implements the same enterprise identity adapter/principal contract without changing application authorisation or RLS.
 
 ## Authorisation model
 
@@ -120,9 +125,9 @@ Guests:
 
 ## Approval security
 
-- Canonical snapshot content is displayed and decision controls bind to snapshot ID/hash.
-- The decision transaction locks request/requirement, rejects stale state, records reviewer authority/reauthentication context, recalculates state, and writes audit/outbox atomically.
-- High-Assurance policy can require recent MFA, distinct principals, author/reviewer separation, or multiple roles.
+- Canonical immutable snapshot content is displayed and decision controls bind to snapshot ID/hash.
+- The decision transaction locks request/requirement, rejects a request in `stale` state or a snapshot that is no longer usable as current authority, records reviewer authority/reauthentication context, recalculates state, and writes audit/outbox atomically. The snapshot and prior decisions are never marked or mutated as stale.
+- High-Assurance policy can require the exact unexpired action/snapshot-bound reauthentication grant, distinct principals, author/reviewer separation, or multiple roles.
 - Historical decisions remain immutable if the reviewer later leaves. Current-use validity is re-evaluated before execution/release.
 - AI/system/integration/operator actors are structurally ineligible to approve.
 - The Legal electronic signature module is future-only. UI/documentation must not call Project approval or High-Assurance project approval legally binding.
@@ -136,6 +141,14 @@ Guests:
 - Scope binds organisation, cycle, repository/commit/branch, path/network/tool/secret policy, limits, and runner environment identity.
 - Immediate revocation on cancellation, authority loss, relevant material change, repository loss, or cleanup.
 
+### Active work-item claims
+
+- Authorisation locks selected work items and atomically inserts `execution_work_item_claims`; the partial unique `(organisation_id, work_item_id) WHERE released_at IS NULL` index is the final race control.
+- A conflict issues no capability and leaves no partial claim set. The failure is recorded safely without exposing another tenant or unrelated project details.
+- Claims persist through checkpoints, human input, testing, reporting, required review, and `recovery_required`; neither the runner nor cleanup may release them.
+- Only required-review completion, safe cancellation, an authorised failure-recovery decision after capability/environment containment, or authorised change removal after the affected cycle is safely stopped/contained releases a claim, with audit/outbox in the same transaction.
+- Repository-path overlap detection may produce a warning, but it is not a substitute for first-release work-item claims.
+
 ### Isolation
 
 - Dedicated process/runtime; never execute repository code in API/worker containers.
@@ -143,6 +156,7 @@ Guests:
 - Mount only the approved checkout and explicit writable roots. Resolve symlinks/real paths before policy decisions.
 - Default-deny network egress with protected DNS/redirect resolution.
 - Treat package installation and tests as untrusted code execution under the same sandbox.
+- Cancellation revokes capabilities and secrets immediately, then gives the process the validated `runner_graceful_shutdown_seconds` interval (default `30`, range `5`–`120`) before hard termination; configuration cannot extend authority.
 - Do not offer a hostile multi-tenant managed runner until stronger isolation (for example microVM-class separation), independent review, and incident containment are complete.
 
 ### GitHub
@@ -190,6 +204,7 @@ Guests:
 - Record provider/model/prompt/input hash/usage; encrypt retained raw content.
 - Instance/provider privacy settings, cross-border processing, and subprocessors are documented for operators/organisations.
 - Raw prompts/outputs default to 90 days; raw runner logs 30 days; accepted structured project history persists.
+- Direct-to-Codex baseline evaluation is confined to the dedicated synthetic demo tenant and fixture repository. It receives no real tenant corpus, quarantined content, production secrets, approval authority, or production runner capability; comparison results are immutable, attributed evaluation evidence.
 
 ## Healthcare-data boundary
 
@@ -275,12 +290,16 @@ Incident runbooks cover account/session compromise, cross-tenant exposure, stole
 
 - Tenant/RLS and cross-tenant FK negative tests.
 - Permission matrix and guest object/stage tests.
-- Invitation/session/MFA/revocation/CSRF/rate-limit tests.
-- Snapshot hash, staleness, concurrency, and authority-race tests.
+- Better Auth `1.6.23` version-coherence, direct-Fastify, database-session, cookie-cache-off, hashed-magic-link, passkey/TOTP, session-replacement/revocation, database lookup-token protection, CSRF, and rate-limit tests.
+- High-Assurance reauthentication tests prove fresh passkey user verification, action/snapshot binding, one-use consumption, 15-minute maximum expiry, and rejection of magic-link/TOTP/session-`updateAge` evidence as an implicit grant.
+- Snapshot hash, approval-request staleness, snapshot immutability, concurrency, and authority-race tests.
 - Upload/malware/quarantine/signed-URL/prohibited-content tests.
 - Webhook signature/replay/out-of-order/reconciliation tests.
 - Prompt-injection/source-ID/output-schema tests.
-- Runner path/symlink/network/tool/secret/limit/revocation/cancellation/cleanup tests.
+- Runner path/symlink/network/tool/secret/limit/revocation/cancellation/configuration-bound/cleanup tests, including `runner_graceful_shutdown_seconds` at `5`, `30`, and `120` plus rejection outside bounds.
+- Active work-item claim transaction/race/duplicate/cancellation/review/recovery tests prove no partial acquisition and no implicit release from `recovery_required`.
+- Demonstration-isolation tests prove the direct baseline cannot use real tenant data or create approval/capability records and that immutable comparison metrics trace to both exact input manifests.
 - SAST, dependency/secret/container/IaC scanning and targeted DAST.
 - Backup restore and tenant export/deletion verification.
 - Independent runner/threat-model review before managed execution.
+- Required CI runs `pnpm docs:validate` for Markdown links/formatting/trailing whitespace, Mermaid syntax where practical, duplicate/missing IDs and references, canonical state/enum names, broken file links, and accidental initial-release Legal electronic signature dependencies.

@@ -42,6 +42,7 @@ The first real journey is a two-person project: a developer and a chiropractor s
 - `apps/api`: NestJS with Fastify, REST/OpenAPI commands and resources, and Server-Sent Events (SSE).
 - `apps/worker`: BullMQ consumers for AI, notifications, integrations, outbox delivery, and reconciliation.
 - `apps/runner`: isolated Codex runner trust boundary; it is operationally separate from the general worker.
+- Better Auth `1.6.23` (all Better Auth packages pinned to the same patch) mounted directly on the Fastify boundary, with PostgreSQL/Drizzle database sessions, cookie caching disabled so revocation takes effect on the next authenticated request, hashed magic-link tokens, and passkey/TOTP plugins. High-Assurance actions use an application-owned, action/snapshot-bound reauthentication grant after fresh passkey user verification. Verified sessions become an internal application principal; application authorisation and RLS do not depend on Better Auth.
 - PostgreSQL with Drizzle and reviewed SQL migrations.
 - Shared-schema multi-tenancy with `organisation_id`, tenant-aware foreign keys, application authorisation, and PostgreSQL Row-Level Security (RLS).
 - Redis and BullMQ for disposable coordination, not authoritative state.
@@ -83,7 +84,9 @@ The first company version supports all five core journeys:
 4. A restricted, approval-gated Codex cycle through checkpoint, testing, and human review.
 5. Material change control and a release record with full traceability.
 
-The single demonstration spine is specified in [Demo Journey](13-demo-journey.md). Slack, Teams, calendars, storage connectors, GitHub Enterprise Server, visual workflow design, Waterfall/hybrid templates, enterprise provisioning, managed multi-region hosting, and the Legal electronic signature module are later extensions.
+The single demonstration spine is specified in [Demo Journey](13-demo-journey.md). It includes a controlled direct-to-Codex baseline using only the original synthetic project idea and a platform-assisted run using discovery, evidence, approvals, scoped execution, tests, and reviews. Immutable `demonstration_comparison_results` compare unsupported assumptions, missing requirements/domain questions/acceptance criteria, correction burden, stakeholder confidence, and requirement-to-code-to-test traceability. The baseline is evaluation evidence only and cannot bypass the normal execution-authorisation path.
+
+Slack, Teams, calendars, storage connectors, GitHub Enterprise Server, visual workflow design, Waterfall/hybrid templates, enterprise provisioning, managed multi-region hosting, and the Legal electronic signature module are later extensions.
 
 ## First-company-version success criteria
 
@@ -97,7 +100,7 @@ The single demonstration spine is specified in [Demo Journey](13-demo-journey.md
 | SC-06 | Codex cannot start or resume without a valid approved execution-plan version and current authority. |
 | SC-07 | Codex cannot exceed its approved repository, commit, branch, path, network, tool, secret, or system scope. |
 | SC-08 | Codex stops at configured checkpoints and continuous stop conditions. |
-| SC-09 | Required stakeholders review the outcome before another execution cycle begins. |
+| SC-09 | Active work-item claims prevent overlapping execution, and required stakeholders review the outcome before claims are released for another affected cycle. |
 | SC-10 | A release traces to requirements, approvals, work items, code changes, tests, and reviews. |
 | SC-11 | The complete two-person journey is understandable without formal project-management training. |
 | SC-12 | Automated tenant-isolation tests prevent cross-organisation reads, writes, and references. |
@@ -127,17 +130,19 @@ Each slice ends in demonstrable user value; details are in [Implementation Roadm
 | AI hallucination or evidence mislink | Incorrect requirements presented as fact | Proposal status, origin labels, source citations, human correction, evaluations |
 | Over-general artifact/workflow abstractions | Slow development and opaque invariants | Typed extensions and code-owned integrity rules; limited preset configuration |
 | Guest account takeover | Unauthorised answers or approvals | Hashed expiring tokens, secure sessions, project scope, revocation, reauthentication for configured approvals |
-| Duplicate jobs or webhooks | Repeated cycles, PRs, emails, or state transitions | Idempotency keys, unique constraints, inbox/outbox, reconciliation |
+| Duplicate or overlapping work | Repeated cycles, concurrent edits to the same work item, PRs, emails, or state transitions | Idempotency keys, one active `execution_work_item_claims` row per work item, inbox/outbox, reconciliation |
 | Self-host operational failure | Data loss or prolonged outage | Documented backups, restore drills, health checks, expand/contract migrations, observability |
 | Scope growth across product stages | Delayed usable product | Six vertical slices and one fixed demo spine; defer secondary integrations and the Legal electronic signature module |
 
 ## Recommended next five Codex tasks
 
-1. Materialise repository/tooling foundations and the local Docker Compose development topology.
-2. Implement identity, organisations, projects, tenant-aware database access, RLS, audit, and outbox foundations.
+1. Materialise repository/tooling foundations, the repeatable `pnpm docs:validate` CI gate, and the local Docker Compose development topology.
+2. Implement the selected Better Auth adapter, internal application-principal boundary, organisations, projects, tenant-aware database access, RLS, audit, and outbox foundations.
 3. Implement guest invitations, questions, responses, knowledge sources, and immutable evidence.
-4. Implement typed artifact versions, plans, approval snapshots, staleness, readiness, and AI-assisted proposals.
-5. Implement Agile planning and then the first approved isolated Codex cycle as the Slice 5 vertical path.
+4. Implement typed artifact versions, plans, immutable approval snapshots, approval-request staleness, readiness, and AI-assisted proposals.
+5. Implement Agile planning and then the first approved isolated Codex cycle with atomic active work-item claims as the Slice 5 vertical path.
+
+Runner cancellation uses validated operator configuration `runner_graceful_shutdown_seconds`, default `30`, constrained to `5` through `120` seconds. Revocation remains immediate regardless of the configured process grace period.
 
 ## Documentation map
 

@@ -6,7 +6,7 @@ Related: [Executive Summary](00-executive-summary.md), [Demo Journey](13-demo-jo
 
 ## Problem statement
 
-Teams increasingly use AI agents to plan and implement software, but most project tools record tasks without preserving the knowledge, evidence, approval, and authority needed to trust the work. Important decisions remain in meetings, email, or chat. Requirements lose their provenance. An agent can begin work against incomplete logic, stale approvals, or an ambiguous scope, and a pull request can be mistaken for completion.
+Teams increasingly use AI agents to plan and implement software, but most project tools record tasks without preserving the knowledge, evidence, approval, and authority needed to trust the work. Important decisions remain in meetings, email, or chat. Requirements lose their provenance. An agent can begin work against incomplete logic, stale approval requests, or an ambiguous scope, and a pull request can be mistaken for completion.
 
 The product must make the application the source of truth for both project logic and authorised AI execution.
 
@@ -18,6 +18,7 @@ The product must make the application the source of truth for both project logic
 - Provide a polished Agile workflow while keeping a versioned workflow model extensible.
 - Prevent Codex from starting or resuming outside a valid execution authorisation.
 - Prove completion using acceptance criteria, tests, technical review, stakeholder review, and release evidence.
+- Demonstrate the measurable benefit of structured discovery and control against a synthetic direct-to-Codex baseline without creating an execution-authorisation bypass.
 - Support an AGPL-3.0 self-hosted deployment and a later managed service.
 
 ## Non-goals for the first company version
@@ -71,6 +72,8 @@ All three modes use the same underlying workflow and approval engine. High-Assur
 
 ## Canonical user journeys
 
+The canonical project workflow state while the plan is under review is `plan_in_review`; APIs, events, seeds, UI projections, and tests use that exact key.
+
 ### Journey A — discovery and plan approval
 
 The developer creates an organisation/project, invites a domain expert, and both contribute questions. AI suggests labelled questions and explanations. The guest answers in a focused interface. AI proposes requirements, assumptions, risks, and acceptance criteria linked to evidence. Humans correct the proposals, create a plan version, and the configured reviewers approve its immutable snapshot.
@@ -85,7 +88,7 @@ An execution plan identifies an exact approved plan, work items, repository, com
 
 ### Journey D — material change
 
-A stakeholder proposes a change. The system records classification and impact. Affected artifacts receive new versions; dependent approvals become stale; affected queued/running work is prevented or cancelled. New execution uses only current approved versions.
+A stakeholder proposes a change. The system records classification and impact. Affected artifacts receive new versions; dependent approval requests become `stale` while their immutable snapshots/decisions remain historical; affected queued/running work is prevented or cancelled. New execution uses only current approved versions.
 
 ### Journey E — release
 
@@ -105,6 +108,7 @@ The executable demonstration of these journeys is [Demo Journey](13-demo-journey
 | FR-004 | Invitations are single-use, expiring, revocable, stored hashed, and scoped to an organisation or project. |
 | FR-005 | A guest enters directly into assigned project work and cannot access organisation administration or unrelated project data. |
 | FR-006 | A guest can save drafts, resume later, and request replacement access after expiry without revealing project data. |
+| FR-045 | Authentication uses Better Auth `1.6.23` with every Better Auth package pinned to that patch, mounted directly on Fastify with PostgreSQL/Drizzle database sessions and cookie caching disabled. Magic link uses `storeToken: 'hashed'`; passkey and TOTP use first-party plugins. Session revocation is immediate; `updateAge` is treated only as expiry renewal, not token rotation, so privilege/recovery boundaries revoke the old session and require a fresh authenticated session. High-Assurance actions require an application-owned, action/snapshot-bound `reauthentication_grant` expiring within 15 minutes after fresh passkey user verification. Verified sessions map to an internal principal; authorisation/RLS stay independent, and future enterprise providers implement the same identity adapter. |
 
 ### Discovery, knowledge, and evidence
 
@@ -161,7 +165,7 @@ The executable demonstration of these journeys is [Demo Journey](13-demo-journey
 | FR-035 | Codex stops for completion, checkpoint, human input, scope denial, limit, failed tests, revocation, material change, cancellation, or runner failure. |
 | FR-036 | Technical users can inspect detailed activity; non-technical users receive a plain-language report, stop reason, and next action. |
 | FR-037 | A cycle cannot become `completed` until required testing and execution reviews pass. |
-| FR-038 | Another execution cycle cannot begin for affected work until required review of the prior cycle is recorded. |
+| FR-038 | Atomic active work-item claims prevent overlapping execution; a claim remains held through checkpoint, human-input, testing, reporting, and required review and is released only by an authorised terminal/recovery/change command. |
 
 ### Change, release, and collaboration
 
@@ -174,22 +178,29 @@ The executable demonstration of these journeys is [Demo Journey](13-demo-journey
 | FR-043 | Important actions produce append-only audit events for human, AI, system, integration, and operator actors. |
 | FR-044 | Tenant data can be exported and organisation deletion follows an auditable grace-and-purge process. |
 
+### Demonstration comparison
+
+| ID | Requirement |
+|---|---|
+| DEMO-001 | The canonical synthetic scenario records a direct-to-Codex baseline that receives only the original project idea and a platform-assisted result, then presents an immutable comparison of unsupported assumptions, missing requirements, domain questions not asked, missing acceptance criteria, corrections requested, requirements discovered, assumptions prevented, acceptance-criterion coverage, stakeholder confidence, and requirement-to-code-to-test traceability. The baseline is isolated evaluation evidence and cannot issue production runner authority. |
+
 ## Runner requirements
 
 | ID | Requirement |
 |---|---|
 | RUN-001 | Cycle states use the canonical state machine in [Workflows and Approvals](04-workflows-and-approvals.md). |
 | RUN-002 | Cycle creation is idempotent using `execution-cycle:{execution_plan_version_id}`. |
-| RUN-003 | The authority transaction locks and validates the cycle, plan version, approval snapshot, policy result, memberships, and repository mapping. |
+| RUN-003 | The authority transaction locks and validates the cycle, plan version, approval request and immutable snapshot, policy result, memberships, repository mapping, and selected work items, then acquires every active work-item claim atomically. |
 | RUN-004 | Capability scope includes tenant, cycle, repo, commit, branch, paths, network, tools, secrets, limits, and expiry. Raw capability values are never stored. |
 | RUN-005 | The runner checks out the approved commit, creates/selects the approved branch, mounts only permitted paths, and applies network policy before Codex starts. |
 | RUN-006 | Secrets are supplied only when authorised, held in ephemeral storage, redacted from events, and revoked before cleanup. |
 | RUN-007 | Turn, task, token, cost, time, scope, and stop conditions are evaluated continuously and usage increments are atomic. |
 | RUN-008 | Safe events stream to the application while sensitive raw content follows retention and redaction policy. |
 | RUN-009 | Tests and a structured work report run even after controlled partial stops where feasible. |
-| RUN-010 | Cancellation revokes authority immediately, attempts graceful stop for 30 seconds, hard-kills if needed, and triggers idempotent cleanup. |
+| RUN-010 | Cancellation revokes authority immediately, waits the validated `runner_graceful_shutdown_seconds` interval (default `30`, allowed `5`–`120`), hard-kills if needed, and triggers idempotent cleanup. |
 | RUN-011 | A crash after side effects enters `recovery_required`; Codex is not automatically rerun against preserved changes. |
 | RUN-012 | Branch, commit, pull-request, report, and cleanup side effects use durable intent and reconciliation before retry. |
+| RUN-013 | `execution_work_item_claims` enforces at most one active claim per organisation/work item; acquisition conflicts fail authorisation, every acquisition/release emits audit and outbox events, and `recovery_required` never silently releases a claim. |
 
 ## Healthcare-data boundary requirements
 
@@ -211,7 +222,7 @@ The executable demonstration of these journeys is [Demo Journey](13-demo-journey
 | SEC-001 | Every request is authenticated where required and authorised against tenant, project, object, action, and stage. |
 | SEC-002 | Tenant-controlled rows include `organisation_id`; tenant-aware composite foreign keys prevent cross-tenant references. |
 | SEC-003 | RLS denies tenant access without valid transaction-local tenant/actor context. |
-| SEC-004 | Sessions, invitations, approval access, and capabilities are expiring and revocable; tokens are stored hashed. |
+| SEC-004 | Better Auth database sessions expire and are immediately revocable because cookie caching is disabled. The documented database session lookup token is a narrow accepted exception to the general digest-only bearer-token rule, protected by database/encryption/access controls; magic-link, invitation, approval-access, and runner-capability tokens use secure digests. `updateAge` is not represented as token rotation. |
 | SEC-005 | Secrets use envelope encryption and are excluded from logs, prompts, events, exports, and error messages. |
 | SEC-006 | Uploads use signed access, type/size validation, content-disposition controls, malware-scan hooks, and quarantine. |
 | SEC-007 | Webhooks require signature verification, delivery deduplication, safe parsing, and reconciliation. |
@@ -289,6 +300,7 @@ The executable demonstration of these journeys is [Demo Journey](13-demo-journey
 - Execution plans, execution-cycle view, technical agent activity, tests, and reviews.
 - Change proposals and impact analysis.
 - Release record and evidence chain.
+- Direct-to-Codex versus platform-assisted demonstration results.
 - Comments/activity, audit history, members, workflow, repositories, and settings.
 
 ### Guest view
@@ -315,6 +327,7 @@ The executable demonstration of these journeys is [Demo Journey](13-demo-journey
 | NFR-008 | Migrations use expand/backfill/switch/contract where zero-downtime compatibility is required. |
 | NFR-009 | Operators have documented backup, restore, upgrade, rollback, seed, import, export, and deletion procedures. |
 | NFR-010 | The repository has AGPL licensing, contribution, security reporting, architecture, and local-development documentation. |
+| NFR-011 | `pnpm docs:validate` runs locally and in required CI to check Markdown links/formatting/trailing whitespace, Mermaid syntax where practical, duplicate requirement/backlog IDs, missing requirement/demo references, canonical workflow/execution states and enum values, broken file links, and accidental initial-release dependencies on Legal electronic signatures. |
 
 ## Acceptance of the first company version
 
@@ -328,7 +341,7 @@ The executable demonstration of these journeys is [Demo Journey](13-demo-journey
 | SC-06 | Codex cannot start or resume without a valid approved execution-plan version and current authority. |
 | SC-07 | Codex cannot exceed its approved repository, commit, branch, path, network, tool, secret, or system scope. |
 | SC-08 | Codex stops at configured checkpoints and continuous stop conditions. |
-| SC-09 | Required stakeholders review the outcome before another execution cycle begins. |
+| SC-09 | Active work-item claims prevent overlapping execution, and required stakeholders review the outcome before claims are released for another affected cycle. |
 | SC-10 | A release traces to requirements, approvals, work items, code changes, tests, and reviews. |
 | SC-11 | The complete two-person journey is understandable without formal project-management training. |
 | SC-12 | Automated tenant-isolation tests prevent cross-organisation reads, writes, and references. |

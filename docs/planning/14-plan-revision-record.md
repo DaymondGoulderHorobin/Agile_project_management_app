@@ -2,9 +2,10 @@
 
 ## Record status
 
-This is the **first on-disk materialisation** of the approved conversational planning dossier. At materialisation time, the repository contained no prior `docs/planning/` files and no commit history from which an earlier written dossier could be reconstructed. Accordingly, this record compares the approved conversational baseline and preserved-decision list with files `00` through `14`; it does not claim a prior on-disk revision history.
+This dossier began as the **first on-disk materialisation** of the approved conversational plan. At initial materialisation, the repository contained no prior `docs/planning/` files and no commit history from which an earlier written dossier could be reconstructed, so `REV-001`–`REV-017` compare that conversational baseline with files `00` through `14` and do not claim an earlier on-disk revision history. `REV-018` onward records the subsequent implementation-readiness correction pass against that first materialisation.
 
 Materialisation date: 2026-07-22 (Pacific/Auckland).
+Implementation-readiness correction date: 2026-07-22 (Pacific/Auckland).
 
 ## Authoritative baseline
 
@@ -14,6 +15,7 @@ The baseline consisted of:
 2. The 24 decisions explicitly marked for preservation.
 3. The required revisions: Legal electronic signature deferral, single demo spine, exact runner lifecycle, stronger health-data exclusion, measurable stakeholder UX, six vertical slices, company-version success criteria, and a revision record.
 4. The instruction that this task changes documentation only and must not create application code, migrations, scaffolding, or dependencies.
+5. The mandatory implementation-readiness findings: resolve Better Auth, prevent overlapping execution work, correct approval-request staleness terminology, standardise `plan_in_review`, make cancellation grace configurable, add CI documentation validation, and add a controlled Direct-to-Codex comparison.
 
 ## Preserved decisions
 
@@ -67,6 +69,13 @@ No direct technical contradiction was discovered among these decisions. Implemen
 | REV-015 | Added a consolidated blocker register, moving resolved choices to ADRs and future Legal electronic signature questions to a non-blocking future section. | Open questions must drive decisions rather than duplicate settled architecture. | `10`, `11`, `14` | Preserves settled ADRs; defers future modules explicitly. | Reduces decision duplication and accidental blocking. | `OQ-*` register is authoritative. | Each blocker states its exact slice/launch effect. |
 | REV-016 | Added a single-owner ordered backlog under `EPIC-S1`–`EPIC-S6`, with requirement/demo traceability, risk, uncertainty, human decision, verification and bounded Codex-work notes. | Implementation handoff needs mechanical scope without implying that code was authorised in this task. | `08`, `12`, `13`, `14` | Preserves all technical choices and vertical-slice order. | Reduces duplicate ownership and ambiguous handoff risk. | The first handoff requires the Slice 1 decisions in `11`. | Recommends Slice 1 as the next Codex task. |
 | REV-017 | Closed materialisation-review gaps with append-only approval revocation, explicit versioned change/impact/application tables, append-only artifact lifecycle events, corrected semantic requirement-to-slice/demo traceability, and a production topology with a separate runner host/provider. | Generic status fields and syntactically valid but semantically wrong ID references were insufficient for implementation; a same-host production default weakened the preserved runner boundary. | `02`–`09`, `12`–`14` | Strengthens decisions 6, 15, 16, 20–22 without changing the product architecture. | Reduces unsupported-demo-transition, authority-revocation, duplicate-ownership and runner-escape risk; a separate production runner boundary adds operator topology burden. | Existing `OQ-RUN-01`, `OQ-DEPLOY-01`; no new product-scope question. | No slice reorder; raises Slice 1 topology documentation and Slice 5 containment gates, while Change Control remains solely Slice 6. |
+| REV-018 | Resolved `OQ-ID-01` with `ADR-025`: pin Better Auth `1.6.23` packages to one patch, mount the official handler directly in Fastify, use Drizzle/PostgreSQL database sessions with cookie cache off, hashed magic-link tokens, first-party passkey/TOTP, internal principals and tenant-aware one-use action/snapshot-bound `reauthentication_grants`; do not use community NestJS glue or the Better Auth organisation plugin. Recorded that `updateAge` is renewal rather than rotation and that the DB session lookup token is a narrow sensitive-storage exception. | Authentication could not remain both selected and unresolved, and official capabilities/limitations needed implementation-level treatment. | `00`–`12`, `13`, `14` | Preserves Next.js plus NestJS/Fastify, PostgreSQL/Drizzle, self-hosting, application authorisation and RLS; adds no identity-provider coupling to domain policy. | Reduces provider ambiguity, revocation-latency, unstable-glue and High-Assurance binding risk; introduces Better Auth upgrade/migration, sensitive lookup-token and app-owned grant verification burden. | Closes `OQ-ID-01`; narrows `OQ-ID-02` to whether TOTP may ever be a High-Assurance fallback. | Removes identity-provider selection as a Slice 1 blocker; adds explicit Better Auth/grant/storage tests to Slice 1. |
+| REV-019 | Added database-enforced active `execution_work_item_claims`, atomic acquisition during `authorising`, rollback-to-`requested` conflict semantics, separate idempotent denial audit/outbox, claim retention through required review/recovery, and the only release reasons: `required_review_completed`, `safely_cancelled`, `authorised_failure_recovery`, `authorised_change_removed_work`. Added `ADR-026`, `RUN-013`, backlog ownership and race/recovery tests. | One cycle per plan version did not prevent different versions from concurrently acting on the same work item. | `00`–`10`, `12`–`14` | Preserves one-cycle-per-version, exact approval, transactions/audit/outbox and runner isolation. | Reduces overlapping code work and authorisation races; introduces orphaned-claim, long-review and authorised-recovery operational risk. | No new external choice; repository-path overlap remains warning/future extension. | No reorder; adds `S5-T05` as a prerequisite to cycle authorisation and claim-aware Slice 6 change handling. |
+| REV-020 | Standardised staleness language: a relevant change marks the approval request `stale` and invalidates the unchanged immutable snapshot's use as current authority; snapshots and decisions remain unchanged historical evidence. | Earlier shorthand implied an immutable snapshot could itself become stale or mutable. | `00`–`14` | Strengthens immutable approval snapshot decision 16 and normal/High-Assurance approvals. | Reduces schema/workflow/test ambiguity and accidental mutation risk. | None. | No sequence change; corrects Slice 3 and Slice 6 acceptance/tests. |
+| REV-021 | Standardised the canonical project workflow state as `plan_in_review` and removed the former alias. | One workflow concept had two names, which would create enum, projection and documentation-validation drift. | `01`–`04`, `07`, `09`, `10`, `12`–`14` | Preserves versioned workflow presets and project modes. | Reduces migration/API/event incompatibility risk. | None. | No sequence change. |
+| REV-022 | Made graceful runner termination configurable as `runner_graceful_shutdown_seconds`, default 30 and allowed range 5–120 seconds, with capability-first revocation, deadline-aware hard kill and boundary/configuration tests under `RUN-010`. | A hard-coded grace period was not operator-safe or testable across deployment substrates. | `01`, `03`–`10`, `12`–`14` | Preserves cancellation, cleanup and isolated runner lifecycle. | Reduces inflexible shutdown risk; introduces unsafe configuration and signal-race risk controlled by validation/tests. | None; the safe range is decided. | No reorder; strengthens `S5-T04` and `S5-TEST01`. |
+| REV-023 | Added `NFR-011`, `S1-T04` and the single blocking local/CI command `pnpm docs:validate` for links, Mermaid where practical, duplicate/missing IDs and references, canonical states/enums, broken file links, accidental mandatory Legal electronic signature language, Markdown formatting and trailing whitespace. | Fifteen interlinked planning files need repeatable drift detection, not only a one-time manual review. | `00`, `01`, `08`, `09`, `12`, `14` plus repository CI when implemented | Preserves the dossier as implementation authority and all deferred boundaries. | Reduces silent traceability/terminology/link drift; introduces validator-maintenance and false-positive risk. | None. | Adds an explicit Slice 1 tooling task and a blocking gate to every later documentation change. |
+| REV-024 | Added `DEMO-001`: a controlled immutable Direct-to-Codex baseline versus platform-assisted comparison, canonical `demonstration_comparisons`/`demonstration_comparison_results`, reproducible inputs/rubric, evaluation-only baseline, accessible results screen/report, backlog ownership and end-to-end tests. | The demo must show measurable product value against the unstructured starting approach, not rely on assertion. | `00`–`03`, `05`, `07`–`10`, `12`–`14` | Preserves the single `DJ-01`–`DJ-22` spine, normal authority controls and release traceability; baseline output cannot become approved delivery work. | Reduces product-value ambiguity; introduces experiment-bias, scorer-consistency, cost and messaging risk. | Demo limits/fixture decisions remain `OQ-RUN-03`/`04`; no new architecture blocker. | No reorder; `S5-US06` owns comparison capability and Slice 6 adds the final release-trace projection. |
 
 ## Files created
 
@@ -93,6 +102,10 @@ No direct technical contradiction was discovered among these decisions. Implemen
 - A secure but unusable collection of components now has a single measurable user journey.
 - Approval evidence cannot be confused with mutable content, AI approval, or a Legal electronic signature.
 - Codex lifecycle, revocation, idempotency, cleanup and recovery are explicit at schema, queue, UI and test levels.
+- Better Auth selection, direct Fastify boundary, app-owned step-up grants and known session-token limitations are explicit rather than contradictory.
+- Database-enforced work-item claims prevent overlapping approved cycles and retain ownership through review/recovery.
+- The controlled baseline comparison makes product value measurable without representing unapproved output as delivery work.
+- Repeatable documentation validation converts terminology/traceability checks into a CI gate.
 - Guests have a narrow project-scoped path and clear recovery for invalid invitations.
 - Identifiable health information is outside intended workflows and has preventive, detective and incident controls.
 - Slice exits expose integration and tenant-isolation failures early.
@@ -105,6 +118,9 @@ No direct technical contradiction was discovered among these decisions. Implemen
 - External GitHub effects and runner cleanup require durable reconciliation and operational drills.
 - Accessibility/usability gates require representative participants and manual validation.
 - Fifteen linked planning files can drift unless traceability and terminology checks remain automated.
+- Better Auth's database session lookup token is a narrow sensitive-storage exception, and `updateAge` does not rotate its value; access/redaction/revocation controls and version-pinned upgrade review are mandatory.
+- Active claims can block work during prolonged review or recovery, so dashboards, alerts and authorised release runbooks are operationally important.
+- A baseline comparison can mislead if inputs, limits, rubric or scoring differ; immutable hashes and limitations reduce but do not remove experiment-bias risk.
 
 ## Deferred capabilities
 
@@ -119,7 +135,7 @@ None is required for a complete Project approval, High-Assurance project approva
 
 ## Open questions created or consolidated
 
-The authoritative open-question list is [11-open-questions.md](./11-open-questions.md). The decisions that block earliest work are the identity implementation (`OQ-ID-01`), the default approval policy/reauthentication settings before Slice 3 (`OQ-ID-02`, `OQ-WF-01`), and GitHub/isolation/egress/demo limits before Slice 5 (`OQ-GH-01`, `OQ-RUN-01`–`04`). Operations, incident ownership and retention block production launch, not local vertical-slice learning.
+The authoritative open-question list is [11-open-questions.md](./11-open-questions.md). `OQ-ID-01` is resolved by `ADR-025`; implementation verification remains mandatory but provider selection is not open. The earliest remaining product-policy decisions are the permitted High-Assurance fallback factor and default approval/readiness policy (`OQ-ID-02`, `OQ-WF-01`), followed by GitHub/isolation/egress/demo limits before Slice 5 (`OQ-GH-01`, `OQ-RUN-01`–`04`). Operations, incident ownership and retention block production launch, not local vertical-slice learning.
 
 ## Implementation-sequence effect
 
@@ -142,6 +158,12 @@ The following checks are required at handoff and their evidence should be regene
 - Internal Markdown links resolve and Mermaid fences are balanced/renderable.
 - Requirement, success, demo, backlog and slice identifiers resolve to one definition.
 - Canonical approval/cycle/environment states and entity/table names are consistent.
+- Project workflow uses only `plan_in_review`; no former alias remains.
+- Approval staleness applies only to `approval_requests`; immutable snapshots/decisions remain unchanged historical evidence.
+- Active work-item claims have atomic acquisition/conflict, exact release reasons, audit/outbox, recovery retention and race tests.
+- `runner_graceful_shutdown_seconds` has default 30, range 5–120 and configuration/deadline tests.
+- `pnpm docs:validate` is specified as the same blocking local/CI command and covers every mandatory documentation check.
+- `DEMO-001` has immutable inputs/results, fair controls, accessible report, no-authority-confusion rules and backlog/test ownership.
 - No Legal electronic signature work is assigned to an initial requirement, schema table, slice, demo dependency, acceptance gate or success criterion.
 - Every `DJ-*` record and transition maps to the domain/data/workflow model and every step has a permission rule and recovery path.
 - Every runner transition has persistence, expected-state transaction, audit/outbox, idempotency/retry, cleanup/recovery and test treatment.
@@ -155,7 +177,7 @@ The following checks are required at handoff and their evidence should be regene
 Completed on 2026-07-22 after the final consistency corrections:
 
 - Exactly 15 planning files exist, all Markdown; no application code, migration, scaffold, dependency manifest or generated diagram asset was created.
-- All 106 defined requirement IDs and all 49 backlog item IDs resolve; unknown references: zero.
+- All 110 defined requirement IDs and all 52 backlog item IDs resolve; unknown references: zero.
 - All 22 demo steps exist and each contains all 13 required contract fields; every backticked stored-record reference resolves to a data-model table (with enum values excluded from that check).
 - All 16 canonical runner record/table names are present, and cycle, runner-environment, stop-reason, approval-request and approval-decision vocabularies contain every canonical value in the data/workflow/AI documents.
 - Internal Markdown links broken: zero; malformed table pipe counts: zero; unbalanced code fences: zero; Git whitespace-check findings: zero.
@@ -166,4 +188,4 @@ Completed on 2026-07-22 after the final consistency corrections:
 
 ## Recommended next Codex task
 
-Perform the Slice 1 planning-to-implementation handoff: resolve `OQ-ID-01`, approve the tenant/RLS and identity threat model, then scaffold the repository foundation and implement tenant-safe identity, organisation, project, audit and outbox foundations with RLS tests. That future task is application implementation and was not begun during this planning materialisation.
+Begin the Slice 1 implementation handoff with `ADR-025` already decided: approve the concrete Better Auth `1.6.23` configuration and identity/tenant/RLS threat model, then implement `S1-T01`–`S1-T04`, identity/organisations/projects/audit/outbox and the blocking Better Auth, RLS and `pnpm docs:validate` tests. Provider selection must not be reopened without new contradictory evidence and an ADR update.

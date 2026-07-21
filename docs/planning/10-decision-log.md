@@ -1,7 +1,7 @@
 # Architecture Decision Log
 
-Status: Proposed ADRs for review
-Each decision becomes accepted when the planning dossier is approved. Reconsideration conditions are explicit and do not permit silent divergence.
+Status: Accepted planning decisions
+The approved dossier and mandatory implementation-readiness corrections make these decisions authoritative for implementation. Reconsideration conditions are explicit and do not permit silent divergence.
 
 ## ADR-001 — TypeScript across application runtimes
 
@@ -78,7 +78,7 @@ Each decision becomes accepted when the planning dossier is approved. Reconsider
 ## ADR-009 — Immutable approval snapshots and general operational approval engine
 
 - **Context:** Plans, sprints, execution plans, and releases require exact version-bound approval.
-- **Decision:** Canonical immutable snapshot/hash plus versioned policy, evaluated requirements, immutable decisions, and staleness.
+- **Decision:** Canonical immutable snapshot/hash plus versioned policy, evaluated requirements and immutable decisions. A relevant change marks the approval request `stale` and invalidates the unchanged snapshot's use as current authority; the snapshot and decisions never acquire a stale state and remain historical evidence.
 - **Alternatives:** Status columns; per-domain approval tables; role-only checks.
 - **Benefits:** Reusable integrity, auditability, explicit race handling.
 - **Costs:** Snapshot canonicalisation, policy/staleness complexity.
@@ -96,7 +96,7 @@ Each decision becomes accepted when the planning dossier is approved. Reconsider
 ## ADR-011 — Versioned workflow presets with code-owned invariants
 
 - **Context:** Agile now, future methodology flexibility, but arbitrary workflow engines can undermine integrity.
-- **Decision:** Stored immutable Light/Standard/High-Assurance Agile definitions; configurable display/transitions/policies within fixed code invariants. No visual builder initially.
+- **Decision:** Stored immutable Light/Standard/High-Assurance Agile definitions; configurable display/transitions/policies within fixed code invariants. The canonical project workflow state for a submitted plan is `plan_in_review`. No visual builder initially.
 - **Alternatives:** Hard-coded single flow; BPMN/general rules engine; separate methodology systems.
 - **Benefits:** Useful defaults and future extension without bypassing security.
 - **Costs:** Dual code/config reasoning and version migration.
@@ -159,7 +159,7 @@ Each decision becomes accepted when the planning dossier is approved. Reconsider
 ## ADR-018 — Isolated runner trust boundary and canonical lifecycle
 
 - **Context:** Repository code/tests/dependencies/model actions are untrusted and long-running.
-- **Decision:** Separate per-cycle runner environment with canonical cycle/environment states, exact checkout, restricted mounts/network/tools/secrets, safe events, cleanup/recovery.
+- **Decision:** Separate per-cycle runner environment with canonical cycle/environment states, exact checkout, restricted mounts/network/tools/secrets, safe events, cleanup/recovery. Graceful termination uses validated `runner_graceful_shutdown_seconds`, default 30 and allowed range 5–120 seconds, before hard kill.
 - **Alternatives:** Execute in worker/API; rely only on Codex prompt/sandbox; remote customer runner initially.
 - **Benefits:** Reduced blast radius, enforceable authority, auditable operations.
 - **Costs:** Highest operational/security complexity and testing burden.
@@ -186,7 +186,7 @@ Each decision becomes accepted when the planning dossier is approved. Reconsider
 ## ADR-021 — Single demonstration spine
 
 - **Context:** Broad architecture risks producing disconnected infrastructure without a compelling usable journey.
-- **Decision:** Developer + chiropractor `general_business` project is the canonical `DJ-01`–`DJ-22` demonstration and traceability spine.
+- **Decision:** Developer + chiropractor `general_business` project is the canonical `DJ-01`–`DJ-22` demonstration and traceability spine. A controlled `DEMO-001` comparison holds the original idea, fixture repository/base commit, model/profile, limits and scoring rubric constant, then contrasts an immutable Direct-to-Codex baseline with the immutable platform-assisted result. Baseline output is evaluation-only and cannot be approved, merged, released or represented as an authorised execution cycle.
 - **Alternatives:** Feature demos per module; generic sample data; multiple personas/domains.
 - **Benefits:** Clear company story, prioritisation, UX validation, integration proof.
 - **Costs:** Scenario may underrepresent larger-team complexity.
@@ -218,3 +218,21 @@ Each decision becomes accepted when the planning dossier is approved. Reconsider
 - **Benefits:** User freedom/self-hosting and protection against closed network-service forks.
 - **Costs:** Some enterprise contributors/adopters may avoid AGPL; contributor licence/governance needs care.
 - **Reconsider when:** Founder/legal/community review identifies a concrete adoption or business-model failure; never describe a non-open licence as open source.
+
+## ADR-025 — Better Auth at the Fastify authentication boundary
+
+- **Context:** The first implementation needs secure self-hosted passwordless authentication, database-backed revocable sessions, passkeys or TOTP, recent reauthentication, Drizzle/PostgreSQL support and a clean Next.js-to-NestJS/Fastify separation. Authentication was previously both committed and listed as unresolved.
+- **Decision:** Pin Better Auth core and every first-party Better Auth package to `1.6.23` (same exact patch) for the initial implementation. Mount its [official Fastify handler](https://better-auth.com/docs/integrations/fastify) directly under the API authentication route; do not depend on the community-maintained NestJS integration or use the Better Auth organisation plugin for tenancy/authorisation. Use the official [Drizzle adapter](https://better-auth.com/docs/adapters/drizzle) with PostgreSQL and database-backed [sessions](https://better-auth.com/docs/concepts/session-management), with cookie caching off so revocation is checked on every request. Default onboarding/sign-in uses the [magic-link plugin](https://better-auth.com/docs/plugins/magic-link) with `storeToken: "hashed"`; support the official [passkey](https://better-auth.com/docs/plugins/passkey) and [TOTP/2FA](https://better-auth.com/docs/plugins/2fa) plugins. Every verified Better Auth session becomes an internal application principal. High-Assurance actions require an app-owned tenant-aware `reauthentication_grants` record produced after passkey user verification and bound to principal, current session, exact action and subject/snapshot hash; it is one-use and expires within 15 minutes. TOTP may be an explicit policy fallback, but passwordless sign-in is not automatically challenged by the TOTP plugin. Better Auth `updateAge` renews expiry and is not token rotation; account recovery or privilege changes revoke the old session and require a new authentication/session. Better Auth stores a session lookup token in its database session row and documents no hashing option at this version, so this is a narrow accepted sensitive-storage exception protected by minimum database access, encryption at rest, redaction/no export and short/revocable sessions. Organisation/project authorisation, approval eligibility and PostgreSQL RLS remain application-owned and independent. Future OIDC, SAML and SCIM integrations sit behind the same identity adapter.
+- **Alternatives:** Self-hosted Keycloak/OIDC from the outset; a managed identity vendor; a custom authentication implementation; the community NestJS Better Auth wrapper.
+- **Benefits:** Official Fastify, Drizzle/PostgreSQL, magic-link, passkey, TOTP, session-freshness and revocation capabilities satisfy the initial controls while preserving self-hosting and avoiding unstable framework glue; the app-owned grant makes recent reauthentication exact-action/version bound.
+- **Costs:** Better Auth schema/plugin upgrades require reviewed migrations; direct Fastify integration needs careful cookie/body/CORS handling; token-value rotation is not supplied by `updateAge`; the database session lookup token needs a documented narrow exception; High-Assurance grants/internal-principal evidence remain application logic; enterprise federation/provisioning is not initial scope.
+- **Reconsider when:** A supported upgrade removes a required security control, official adapters cannot meet production reliability, or validated enterprise federation requirements justify another provider behind the existing identity interface. Do not couple application authorisation or RLS to the replacement.
+
+## ADR-026 — Active execution work-item claims prevent overlapping cycles
+
+- **Context:** One-cycle-per-execution-plan-version prevents replay of one approval but does not prevent different approved plan versions from concurrently modifying the same Agile work item.
+- **Decision:** Add tenant-owned `execution_work_item_claims` with `work_item_id`, `execution_cycle_id`, `claimed_at`, nullable `released_at` and `release_reason`, plus a partial unique index on `(organisation_id, work_item_id) WHERE released_at IS NULL`. During `authorising`, lock the cycle and selected work items in deterministic order, recheck authority, and insert every claim in the same transition/audit/outbox transaction. Any conflict rolls the authorisation transaction back to `requested`, then a separate idempotent transaction records the denial audit/outbox; it leaves no partial claim, capability or environment. Claims remain active through queued/provisioning/running, checkpoint wait, human input, testing, reporting, awaiting required review and `recovery_required`. Release reasons are exactly `required_review_completed`, `safely_cancelled`, `authorised_failure_recovery`, and `authorised_change_removed_work`; no other reason or direct update is valid. Claim acquisition/release is always audited and emitted through the outbox. Repository-path overlap is a warning/future enforcement extension and never substitutes for the initial work-item constraint.
+- **Alternatives:** Application-only preflight query; lock only the execution-plan version; release at checkpoint/report generation; prevent overlap only by repository path.
+- **Benefits:** Database-enforced race safety, understandable work ownership, deterministic duplicate behaviour and no overlapping Codex work on the same approved unit.
+- **Costs:** Claims can intentionally block new work during long reviews or recovery; operators need explicit recovery/release tooling and monitoring; work-item removal becomes an authorised transition.
+- **Reconsider when:** A future scheduler safely models shared/read-only work or repository-path conflicts with equivalent database-enforced authority and historical evidence. Never silently release claims from `recovery_required`.

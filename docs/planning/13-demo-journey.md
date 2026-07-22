@@ -18,21 +18,41 @@ The visible narrative is:
 - **Project:** a non-clinical appointment and practice-workflow product. Every example is synthetic and non-identifiable.
 - **Mode:** Light, with a fixed two-person project-plan and execution policy for the demo. High-Assurance project approval is shown as an available stricter operational preset, not as a Legal electronic signature.
 
+## Controlled baseline comparison (`DEMO-001`)
+
+The demonstration opens with a read-only **Demonstration comparison** screen and returns to it after `DJ-22`. This is a controlled product-evaluation companion to, not a replacement for, `DJ-01`–`DJ-22`.
+
+Before discovery, an evaluation administrator runs a Direct-to-Codex baseline in a disposable isolated fixture with only the original project idea. The baseline receives no human questions, AI-suggested questions, answers, evidence graph, reviewed requirements, acceptance criteria, approvals or platform trace. It has the same synthetic repository/base commit, model/profile, tool/runtime limits and versioned scoring rubric as the platform-assisted fixture, but no merge/release credentials. Its output is evaluation-only: it cannot become an execution cycle, approval, commit to the approved project branch or release record.
+
+After the live platform-assisted journey, the application shows both immutable results. `demonstration_comparisons` stores the shared input hash, fixture/base commit, model/profile, limits, rubric version and result references. Each `demonstration_comparison_results` row stores cohort (`direct_to_codex` or `platform_assisted`), immutable input/output/score hashes, measured values, reviewer/rubric provenance and object references; corrections create another result rather than mutate one. Access is limited to authorised demonstration/project reviewers, is tenant/RLS scoped, and every create/finalise action writes audit/outbox evidence.
+
+| Comparison measure | Direct-to-Codex baseline | Platform-assisted result |
+|---|---|---|
+| Requirements discovered | Reference-set requirements present without unsupported invention | Human-reviewed requirements linked to exact source fragments |
+| Unsupported assumptions / assumptions prevented | Unsupported assumptions introduced and later identified | Assumptions made explicit, challenged or prevented before execution |
+| Domain questions | Important rubric questions not asked | Human and labelled AI questions asked, answered or explicitly unresolved |
+| Acceptance-criterion coverage | Important requirements with a testable criterion | Accepted important requirements linked to accepted criteria and tests |
+| Corrections required | Stakeholder corrections after reviewing baseline behaviour/output | Corrections requested during structured artifact and behaviour review |
+| Stakeholder confidence | Developer and chiropractor pre-review 1–5 score with rationale | Same reviewers' post-journey 1–5 score with rationale |
+| Traceability | Requirement-to-code-to-test links actually present in baseline output | Evidence → requirement → plan approval → work item → code → test → review → release links |
+
+Success requires a reproducible report with limitations and immutable hashes, not a predetermined claim that the platform wins. Failure conditions include unequal inputs/limits, mutable or missing results, rubric drift, scorer disagreement, inaccessible presentation or language implying the baseline was authorised work. Recovery creates a new versioned comparison/result under the same fixture or explains why the run is incomparable; it never edits a result to improve the story. Requirement: `DEMO-001`. Owning backlog: `S5-US06`; final integration verification: `S5-TEST01` and `S6-TEST01`.
+
 ## DJ-01 — Developer creates the secure workspace
 
 | Field | Demonstration contract |
 |---|---|
 | User | Developer |
 | Screen | Sign in → organisation creation → organisation home |
-| Action | Authenticates, creates the demonstration organisation, and optionally accepts a member invitation test. |
-| System response | Creates the organisation and active owner membership atomically, establishes tenant context, and shows “Create project” as the next action. |
+| Action | Uses a Better Auth magic link or passkey, creates the demonstration organisation, and optionally accepts a member invitation test. |
+| System response | Better Auth verifies the database-backed session at the direct Fastify boundary; the identity adapter creates an internal application principal, then the application creates the organisation and active owner membership atomically, establishes tenant context, and shows “Create project” as the next action. |
 | AI involvement | None. |
 | Stored records | `users`, `auth_accounts`, `auth_sessions`, `organisations`, `organisation_memberships`, `organisation_role_assignments`, `audit_events`, `outbox_events`; optional `invitations`. |
-| Permission check | Verified session; only the authenticated creator can create the organisation; all reads are application-authorised and RLS-scoped. |
+| Permission check | Verified, unrevoked Better Auth session mapped to an internal principal; only the authenticated creator can create the organisation; all reads are application-authorised and RLS-scoped independently of Better Auth. |
 | Success condition | The developer sees only the new organisation; another organisation fixture is inaccessible at API and database levels. |
 | Likely failure conditions | Invalid/expired session; duplicate slug; invitation already consumed; tenant context absent. |
 | Recovery path | Reauthenticate, choose another slug, request a new invitation, or fail closed and alert on missing tenant context. No partial organisation is left. |
-| Requirement IDs | FR-001, FR-003, FR-004, FR-043, SEC-001–SEC-004, SEC-008, SEC-011, NFR-004 |
+| Requirement IDs | FR-001, FR-003, FR-004, FR-043, FR-045, SEC-001–SEC-004, SEC-008, SEC-011, NFR-004 |
 | Backlog IDs | S1-US01–S1-US03, S1-T02, S1-SEC01, S1-TEST01 |
 | Relevant state transitions | Session becomes active; organisation is created active; an optional invitation is `issued → consumed` and atomically creates an active membership; audit/outbox commit with the command. |
 
@@ -214,7 +234,7 @@ The visible narrative is:
 | Recovery path | Navigate directly to each explanatory criterion, repair the source, rerun readiness, or return the already-created identical hash/version. |
 | Requirement IDs | FR-017, FR-018, NFR-001, UX-009, UX-010 |
 | Backlog IDs | S3-US03, S3-US04, S3-TEST01 |
-| Relevant state transitions | Readiness `requested → running → {passed, blocked}`; plan version `draft → in_review → frozen`; workflow `discovery → plan_review` only after deterministic gates. |
+| Relevant state transitions | Readiness `requested → running → {passed, blocked}`; plan version `draft → in_review → frozen`; project workflow `discovery → plan_in_review` only after deterministic gates. |
 
 ## DJ-12 — Required parties approve the exact project plan
 
@@ -228,8 +248,8 @@ The visible narrative is:
 | Stored records | `approval_snapshots`, `approval_requests`, `approval_requirements`, `approval_decisions`, optional `approval_condition_resolutions`, `audit_events`, `outbox_events`. |
 | Permission check | Active assigned reviewer with current project authority; exact snapshot/policy; distinct-person and reauthentication rules when High-Assurance mode is selected. |
 | Success condition | The exact version/hash is operationally approved by both configured reviewers and usable by downstream planning; it requires no Legal electronic signature. |
-| Likely failure conditions | Reviewer no longer authorised, request/snapshot stale, condition unresolved, reauthentication expired, policy not met, or concurrent content change. |
-| Recovery path | Reauthenticate, replace a departed reviewer through policy-authorised administration, resolve conditions, generate a replacement snapshot/request, and retain historical decisions without using stale authority. |
+| Likely failure conditions | Reviewer no longer authorised, approval request is `stale`, condition unresolved, action/snapshot-bound reauthentication grant expired, policy not met, or concurrent content change. The immutable snapshot itself never becomes stale. |
+| Recovery path | Complete the required Better Auth passkey/TOTP step-up and obtain a new action/snapshot-bound reauthentication grant, replace a departed reviewer through policy-authorised administration, resolve conditions, or generate a replacement snapshot/request. Retain the old immutable snapshot/decisions as history without using them as current authority. |
 | Requirement IDs | FR-019–FR-025, SEC-001, SEC-004, SEC-011, UX-009–UX-012, SC-04, SC-05, SC-15 |
 | Backlog IDs | S3-US04–S3-US06, S3-SEC01, S3-TEST01 |
 | Relevant state transitions | Approval request `pending → {approved, changes_requested, rejected}`; dependent change `{pending, approved} → stale`; individual decision is immutable. |
@@ -295,16 +315,16 @@ The visible narrative is:
 | User | Developer and configured execution approver(s) |
 | Screen | Execution approval → cycle status |
 | Action | Reviews and approves the exact execution-plan snapshot, then requests execution once. |
-| System response | Deduplicates with `execution-cycle:{execution_plan_version_id}`; locks/rechecks plan, snapshot, policy result, memberships, and repository mapping; creates one cycle; atomically queues it and issues a hashed short-lived capability; provisions the isolated environment; rechecks again immediately before start. |
+| System response | Deduplicates with `execution-cycle:{execution_plan_version_id}`; locks/rechecks plan, snapshot, policy result, memberships, repository mapping and selected work items in deterministic order; inserts every active work-item claim atomically; creates one cycle; atomically queues it and issues a hashed short-lived capability; provisions the isolated environment; rechecks again immediately before start. If any work item is already actively claimed, the authorisation transaction rolls back to `requested`, then a separate idempotent denial transaction writes audit/outbox; no partial claim, capability or environment exists. |
 | AI involvement | None in approval or authority decisions. |
-| Stored records | `approval_*`, `execution_cycles`, `execution_cycle_work_items`, `runner_capability_grants`, `runner_environments`, `runner_environment_events`, `idempotency_records`, `audit_events`, `outbox_events`, queue/inbox records. |
-| Permission check | Current configured approval; active required memberships; unchanged snapshot/hash and repository access; one cycle per `execution_plan_version_id`; capability claims exactly match approved scope. |
-| Success condition | One and only one authorised cycle reaches a ready isolated environment with an expiring, runner-only capability. |
-| Likely failure conditions | Approval revoked/stale, stakeholder left, repository access changed, duplicate request, provisioning failure, or authority changes during provisioning. |
-| Recovery path | Cancel before capability issuance when invalid; return existing cycle on duplicate; retry safe pre-side-effect provisioning up to three times; revoke capability and destroy environment on post-provision authority failure; enter `recovery_required` if cleanup fails. |
-| Requirement IDs | FR-019–FR-025, FR-031–FR-033, RUN-001–RUN-005, SEC-001, SEC-004, SEC-005, SEC-011, SC-06 |
-| Backlog IDs | S5-US02, S5-T02, S5-T03, S5-TEST01 |
-| Relevant state transitions | Cycle `requested → authorising → queued → provisioning`; environment `requested → creating → ready`; immediately before Codex, cycle `provisioning → running` and environment `ready → active`; invalid authority leads to `cancelling → cancelled`. |
+| Stored records | `approval_snapshots`, `approval_requests`, `approval_requirements`, `approval_decisions`, `execution_cycles`, `execution_cycle_work_items`, `execution_work_item_claims`, `runner_capability_grants`, `runner_environments`, `runner_environment_events`, `idempotency_records`, `audit_events`, `outbox_events`, queue/inbox records. |
+| Permission check | Current configured approval request backed by the unchanged immutable snapshot/hash; active required memberships; current repository access; one cycle per `execution_plan_version_id`; no selected work item has an active claim; capability claims exactly match approved scope. |
+| Success condition | One and only one authorised cycle owns every selected work item and reaches a ready isolated environment with an expiring, runner-only capability. |
+| Likely failure conditions | Approval request `stale` or authority revoked, stakeholder left, repository access changed, another cycle actively claims a selected work item, duplicate request, provisioning failure, or authority changes during provisioning. |
+| Recovery path | Cancel before capability issuance when invalid; show the conflicting work/cycle without leaking another tenant; return existing cycle on duplicate; retry safe pre-side-effect provisioning up to three times; revoke capability and destroy environment on post-provision authority failure. Safely cancelled work releases claims as `safely_cancelled` only after termination/cleanup; `recovery_required` retains claims pending an `authorised_failure_recovery` decision. |
+| Requirement IDs | FR-019–FR-025, FR-031–FR-033, RUN-001–RUN-005, RUN-013, SEC-001, SEC-004, SEC-005, SEC-011, SC-06 |
+| Backlog IDs | S5-US02, S5-T02, S5-T03, S5-T05, S5-TEST01 |
+| Relevant state transitions | Success: cycle `requested → authorising → queued → provisioning`, environment `requested → creating → ready`, then cycle `provisioning → running` and environment `ready → active`. Claim conflict: `requested → authorising → requested` after rollback plus a separate denial audit/outbox transaction. Invalid authority leads to `cancelling → cancelled`. |
 
 ## DJ-17 — Codex works inside the approved boundary
 
@@ -315,13 +335,13 @@ The visible narrative is:
 | Action | Watches Codex work on the approved repository/branch/files while the system streams safe events and monitors limits and authority. |
 | System response | Starts Codex via the Codex SDK, records run/turn/action/usage events, denies unauthorised file/network/tool access before execution, rechecks changing authority, and never labels active work complete. |
 | AI involvement | Codex performs the approved coding task. The runner, not the model, enforces capabilities, filesystem/network/tool boundaries and limits. |
-| Stored records | `agent_runs`, `agent_turns`, `agent_actions`, `execution_usage_events`, `runner_environment_events`, `audit_events`, `outbox_events`; raw sensitive logs are encrypted object references with limited retention. |
-| Permission check | Valid unexpired capability bound to cycle/environment; every action passes path/network/tool/secret policy; atomic usage/limit check; approval/membership/repository authority remains current. |
+| Stored records | Active `execution_work_item_claims`, `agent_runs`, `agent_turns`, `agent_actions`, `execution_usage_events`, `runner_environment_events`, `audit_events`, `outbox_events`; raw sensitive logs are encrypted object references with limited retention. |
+| Permission check | Valid unexpired capability bound to cycle/environment; every selected work item remains actively claimed by this cycle; every action passes path/network/tool/secret policy; atomic usage/limit check; approval/membership/repository authority remains current. |
 | Success condition | Safe activity is understandable in plain language and inspectable technically; all actions remain in scope and usage remains visible. |
 | Likely failure conditions | Blocked file/network attempt, token/cost/turn/task/time limit, approval or membership revocation, repository access loss, material change, cancellation, or runner crash. |
 | Recovery path | Deny and record sanitised action; stop with exact reason; revoke capability; generate partial report and review for limits; cancel on authority/material change; retry only before side effects, otherwise preserve workspace/patch and enter `recovery_required`. |
 | Requirement IDs | FR-033–FR-036, RUN-006–RUN-008, SEC-004, SEC-005, SEC-011, UX-013–UX-015, SC-07, NFR-003–NFR-005 |
-| Backlog IDs | S5-US03, S5-SEC01, S5-T04, S5-TEST01 |
+| Backlog IDs | S5-US03, S5-SEC01, S5-T04, S5-T05, S5-TEST01 |
 | Relevant state transitions | Cycle remains `running`; denial/decision need moves to `human_input_required`; authority/cancel moves `running → cancelling`; unrecoverable crash `running → recovery_required`; limit later proceeds to `reporting`. |
 
 ## DJ-18 — Codex reaches a checkpoint and stops
@@ -331,15 +351,15 @@ The visible narrative is:
 | User | Codex triggers; developer resolves with optional domain-expert input |
 | Screen | Checkpoint decision |
 | Action | Codex reports completed work and asks a bounded product-behaviour question; developer/domain expert supplies the requested decision and explicitly authorises resumption if desired. |
-| System response | Stops work, records the checkpoint and reason, revokes or suspends active capability, shows the next required human action, records input, rechecks approvals/memberships/repository/scope, then issues renewed short-lived authority only if valid. |
+| System response | Stops work, records the checkpoint and reason, revokes or suspends active capability, retains every active work-item claim, shows the next required human action, records input, rechecks approvals/memberships/repository/scope, then issues renewed short-lived authority only if valid. |
 | AI involvement | Codex explains why it stopped and what decision it needs; it cannot decide or resume itself. |
-| Stored records | `execution_checkpoints`, interim `execution_work_reports`, `execution_reviews` of type `checkpoint`, capability revocation/renewal, `audit_events`, `outbox_events`. |
+| Stored records | `execution_checkpoints`, interim `execution_work_reports`, `execution_reviews` of type `checkpoint`, active `execution_work_item_claims`, capability revocation/renewal, `audit_events`, `outbox_events`. |
 | Permission check | Viewer sees only granted detail; responder has checkpoint-decision authority; resumption uses the same immutable plan scope and a full authority recheck. |
 | Success condition | The application plainly shows why Codex stopped, the decision needed, who can act, and that work is not complete; an authorised choice can resume safely. |
 | Likely failure conditions | No authorised responder, stakeholder leaves, approval becomes stale/revoked, repository access changes, requested answer would materially expand scope, or capability renewal fails. |
 | Recovery path | Remain stopped; replace reviewer through authorised policy administration; cancel and create/approve a new plan version for material scope change; restore only identical approved access; or request review of partial work. |
 | Requirement IDs | FR-032, FR-035, FR-036, FR-038, RUN-007–RUN-009, UX-013, UX-015, UX-016, SC-08 |
-| Backlog IDs | S5-US04, S5-T04, S5-TEST01 |
+| Backlog IDs | S5-US04, S5-T04, S5-T05, S5-TEST01 |
 | Relevant state transitions | Cycle `running → {checkpoint_waiting, human_input_required}`; checkpoint `open → resolved`; after recheck `{checkpoint_waiting, human_input_required} → running`, otherwise `cancelling → cancelled` or `recovery_required`. |
 
 ## DJ-19 — Tests, report, code preservation, and cleanup complete
@@ -349,15 +369,15 @@ The visible narrative is:
 | User | System, observed by developer |
 | Screen | Tests and work report |
 | Action | At the configured stop, runs required tests, generates structured/plain/technical reports, preserves changes, creates a commit and pull request where allowed, revokes capability, and destroys the runner. |
-| System response | Stores exact test outcomes/files changed/commits/PR, reconciles every external intent before retry, reports failed tests without claiming completion, cleans secrets first, and requests human review. |
+| System response | Stores exact test outcomes/files changed/commits/PR, reconciles every external intent before retry, reports failed tests without claiming completion, cleans secrets first, requests human review, and retains all work-item claims while review is outstanding. |
 | AI involvement | Codex supplies a structured work report; deterministic collectors and tests verify it against observed changes. |
-| Stored records | `execution_test_runs`, `test_runs`, `test_results`, `execution_work_reports`, `code_changes`, `changed_files`, `runner_capability_grants`, `runner_environments`, `runner_environment_events`, the cycle’s configured review requirements, `audit_events`, and review-notification `outbox_events`. No `execution_reviews` row exists until a human decides. |
+| Stored records | `execution_test_runs`, `test_runs`, `test_results`, `execution_work_reports`, `code_changes`, `changed_files`, active `execution_work_item_claims`, `runner_capability_grants`, `runner_environments`, `runner_environment_events`, the cycle’s configured review requirements, `audit_events`, and review-notification `outbox_events`. No `execution_reviews` row exists until a human decides. |
 | Permission check | Only approved test commands; commit/PR allowed by plan and current GitHub authority; report derives from the current cycle; cleanup does not require an active model capability. |
 | Success condition | Tests and limitations are explicit, changes are preserved, no duplicate commit/PR exists, capability is revoked, environment is destroyed, and human review is outstanding. |
-| Likely failure conditions | Tests fail, report generation fails, GitHub times out after side effect, runner crashes, graceful cancellation exceeds 30 seconds, or cleanup fails. |
-| Recovery path | Preserve failed results/partial report and request review; reconcile branch/commit/PR before retry; hard-kill after grace; revoke secrets/capability first; retry cleanup with backoff; alert operator and use the documented cleanup/reconciliation command; use `recovery_required` rather than rerunning after side effects. |
-| Requirement IDs | FR-034–FR-038, RUN-009, RUN-012, SEC-011, UX-013–UX-015, SC-09 |
-| Backlog IDs | S5-US05, S5-T04, S5-TEST01 |
+| Likely failure conditions | Tests fail, report generation fails, GitHub times out after side effect, runner crashes, graceful cancellation exceeds configured `runner_graceful_shutdown_seconds`, configuration is outside 5–120 seconds, or cleanup fails. |
+| Recovery path | Preserve failed results/partial report and request review; reconcile branch/commit/PR before retry; revoke capability, then hard-kill after the configured grace (default 30 seconds); revoke secrets first; retry cleanup with backoff; alert operator and use the documented cleanup/reconciliation command. Use `recovery_required` rather than rerunning after side effects and retain claims until an authorised recovery release. |
+| Requirement IDs | FR-034–FR-038, RUN-009, RUN-010, RUN-012, RUN-013, SEC-011, UX-013–UX-015, SC-09 |
+| Backlog IDs | S5-US05, S5-T04, S5-T05, S5-TEST01 |
 | Relevant state transitions | Cycle `running → testing → reporting → awaiting_review`; environment `active → revoking → destroying → destroyed`; cleanup failure environment `cleanup_failed` and cycle `recovery_required`; tests-failed stop reason remains `tests_failed`, never `completed`. |
 
 ## DJ-20 — Developer reviews technical work
@@ -367,15 +387,15 @@ The visible narrative is:
 | User | Developer |
 | Screen | Execution review → technical details/files/tests/logs/PR |
 | Action | Inspects the summary, changed-file diffs, allowed actions, tests, usage, stop reason, limitations, commit and pull request; then approves, adds conditions, requests changes, or rejects. |
-| System response | Records an immutable technical review and keeps the cycle `awaiting_review` until all configured review gates pass. |
+| System response | Records an immutable technical review, keeps the cycle `awaiting_review` until all configured review gates pass, and leaves every work-item claim active while stakeholder review is outstanding. |
 | AI involvement | Plain-language and technical summaries are visibly machine-generated/derived; the human review is never AI-authored. |
-| Stored records | `execution_reviews`, optional `comments`, linked `execution_work_reports`, `code_changes`, `changed_files`, `audit_events`, `outbox_events`. |
+| Stored records | `execution_reviews`, active `execution_work_item_claims`, optional `comments`, linked `execution_work_reports`, `code_changes`, `changed_files`, `audit_events`, `outbox_events`. |
 | Permission check | Active assigned technical reviewer with access to repository detail and exact cycle/report; stale or revoked authority cannot decide. |
-| Success condition | The developer understands what changed, what ran, why it stopped, and chooses an explicit review outcome before another cycle can begin. |
+| Success condition | The developer understands what changed, what ran, why it stopped, and chooses an explicit review outcome; the same work remains claimed so another affected cycle cannot begin before required review completes. |
 | Likely failure conditions | Missing diff/log/test evidence, report superseded, reviewer authority lost, failed tests, or unsafe/unexplained change. |
-| Recovery path | Keep `awaiting_review`, regenerate a derived report without altering history, request remediation/new execution-plan version, resolve conditions, or reject. |
-| Requirement IDs | FR-034, FR-036–FR-038, UX-013–UX-015, SC-09 |
-| Backlog IDs | S5-US05, S5-TEST01 |
+| Recovery path | Keep `awaiting_review` and claims active, regenerate a derived report without altering history, request remediation/new execution-plan version, resolve conditions, or reject. Claim release waits for all configured review gates or an authorised terminal recovery decision. |
+| Requirement IDs | FR-034, FR-036–FR-038, RUN-013, UX-013–UX-015, SC-09 |
+| Backlog IDs | S5-US05, S5-T05, S5-TEST01 |
 | Relevant state transitions | A technical review requirement is outstanding; the human appends one immutable `execution_reviews` decision in `{approved, approved_with_conditions, changes_requested, rejected}`. The cycle remains `awaiting_review` until policy resolves, then reaches `completed` only for completed/passing work or `failed` for a reviewed incomplete outcome. |
 
 ## DJ-21 — Domain expert reviews behaviour and team chooses next action
@@ -385,33 +405,33 @@ The visible narrative is:
 | User | Domain expert and developer |
 | Screen | Stakeholder behaviour review → change/next-cycle decision |
 | Action | Chiropractor reviews relevant generic product behaviour in plain language, not source-code administration, and approves, adds conditions, requests changes, or rejects. If changes are material, the developer raises a change proposal and new execution-plan version. |
-| System response | Records an immutable stakeholder review, completes the cycle only if all review policy gates pass, classifies/analyses change impact, stales dependent approvals, and prevents another cycle on the same execution-plan version. |
+| System response | Records an immutable stakeholder review, completes the cycle only if all review policy gates pass, and then atomically releases the cycle’s work-item claims with release reason, audit and outbox. If changes/conditions remain or the cycle is `recovery_required`, claims stay active. It classifies/analyses change impact, marks dependent approval requests `stale`, and prevents another cycle on the same execution-plan version. |
 | AI involvement | May explain behaviour or impact as labelled advice; human reviewers and deterministic policy own outcomes. |
-| Stored records | `execution_reviews`, `comments`, `change_proposals`, `change_proposal_versions`, `change_impact_evaluations`, `change_impact_entries`, `change_applications`, new `artifact_versions`/approval records where needed, updated prior approval request state, `audit_events`, `outbox_events`; a new cycle only from a newly approved execution-plan version. |
-| Permission check | Guest has stakeholder-review permission only for relevant behaviour; change approval follows configured authority; one-cycle-per-plan-version uniqueness; authority rechecked for any new cycle. |
+| Stored records | `execution_reviews`, released or still-active `execution_work_item_claims`, `comments`, `change_proposals`, `change_proposal_versions`, `change_impact_evaluations`, `change_impact_entries`, `change_applications`, new `artifact_versions`/approval records where needed, updated prior `approval_requests`, `audit_events`, `outbox_events`; a new cycle only from a newly approved execution-plan version. |
+| Permission check | Guest has stakeholder-review permission only for relevant behaviour; change approval follows configured authority; claim release requires all configured reviews or an explicit authorised recovery/change command; one-cycle-per-plan-version uniqueness; authority rechecked for any new cycle. |
 | Success condition | Stakeholders explicitly accept the outcome or create a controlled path for corrections; no active/incomplete/review-pending cycle is shown complete. |
 | Likely failure conditions | Guest link/membership revoked, requested change exceeds approved scope, review disagreement, conditions unresolved, or failed tests. |
-| Recovery path | Request a new authorised guest link/reviewer assignment, keep cycle awaiting review, create and approve superseding artifacts/execution plan, resolve conditions, or reject/replan. Never resume under materially obsolete authority. |
-| Requirement IDs | FR-023, FR-038–FR-040, UX-002, UX-011–UX-015, SC-09 |
-| Backlog IDs | S5-US05, S6-US01, S6-US02, S6-TEST01 |
-| Relevant state transitions | A stakeholder review requirement is outstanding; the human appends one immutable `execution_reviews` decision in `{approved, approved_with_conditions, changes_requested, rejected}`. The cycle `awaiting_review → completed` only on satisfied policy; a material change affects another active cycle via `running → cancelling → cancelled`. |
+| Recovery path | Request a new authorised guest link/reviewer assignment, keep cycle and claims awaiting review, create and approve superseding artifacts/execution plan, resolve conditions, or reject/replan. After safe cycle treatment, an authorised failure recovery may use `authorised_failure_recovery`; an authorised change that removes work may use `authorised_change_removed_work`. Never resume under materially obsolete authority. |
+| Requirement IDs | FR-023, FR-038–FR-040, RUN-013, UX-002, UX-011–UX-015, SC-09 |
+| Backlog IDs | S5-US05, S5-T05, S6-US01, S6-US02, S6-TEST01 |
+| Relevant state transitions | A stakeholder review requirement is outstanding; the human appends one immutable `execution_reviews` decision in `{approved, approved_with_conditions, changes_requested, rejected}`. The cycle `awaiting_review → completed` only on satisfied policy, then each claim changes from active (`released_at IS NULL`) to released with reason `required_review_completed`; a material change affects another active cycle via `running → cancelling → cancelled`, with claims released only after safe cancellation. |
 
 ## DJ-22 — System prepares the release record
 
 | Field | Demonstration contract |
 |---|---|
 | User | Developer prepares; configured reviewers approve; both participants view relevant evidence |
-| Screen | Release readiness → release approval → immutable release record |
-| Action | Selects the reviewed work, verifies each requirement, attaches tests and known limitations/rollback note, obtains configured operational approval, and issues the record. |
-| System response | Deterministically checks the full graph, blocks missing/failed evidence, freezes and hashes the release version/snapshot, records approval, and publishes an immutable record linking evidence, requirements, plan approval, sprint, execution approval/cycle, code changes, tests, reviews, and limitations. It records readiness; it does not orchestrate deployment. |
+| Screen | Release readiness → release approval → immutable release record → Demonstration comparison |
+| Action | Selects the reviewed work, verifies each requirement, attaches tests and known limitations/rollback note, obtains configured operational approval, issues the record, and opens the comparison report. |
+| System response | Deterministically checks the full graph, blocks missing/failed evidence, freezes and hashes the release version/snapshot, records approval, and publishes an immutable record linking evidence, requirements, plan approval, sprint, execution approval/cycle, code changes, tests, reviews, and limitations. It records readiness; it does not orchestrate deployment. It then appends the final immutable platform-assisted comparison result and renders it beside the already-frozen Direct-to-Codex result with method/limitations visible. |
 | AI involvement | May draft a visibly labelled release summary; deterministic queries build traceability and humans approve it. |
-| Stored records | `releases`, `release_versions`, `release_work_items`, `release_requirements`, `release_test_evidence`, `release_execution_evidence`, `approval_snapshots`, `approval_requests`, `approval_decisions`, `audit_events`, `outbox_events`. |
+| Stored records | `releases`, `release_versions`, `release_work_items`, `release_requirements`, `release_test_evidence`, `release_execution_evidence`, `approval_snapshots`, `approval_requests`, `approval_decisions`, `demonstration_comparisons`, immutable `demonstration_comparison_results`, `audit_events`, `outbox_events`. |
 | Permission check | Release preparer and configured reviewers have current project authority; all linked records are exact immutable versions/results; tenant scope and RLS apply; failed/unreviewed work blocks release. |
-| Success condition | A reviewer can traverse the complete chain from problem and source evidence to requirements, operational approvals, sprint, execution scope, code, tests, human reviews, limitations, and release hash. |
-| Likely failure conditions | Unverified requirement, stale approval, failed/missing test, unresolved condition/risk, incomplete review, mutable/missing link, or prohibited content in proposed evidence. |
-| Recovery path | Show the exact blocker, add safe immutable evidence or superseding version, rerun verification, obtain current approvals, quarantine/remove prohibited content, and issue a new release version rather than mutate a record. |
-| Requirement IDs | FR-041, FR-043, HC-007, SEC-001, SEC-004, SEC-011, SC-10 |
-| Backlog IDs | S6-US03, S6-US04, S6-SEC01, S6-TEST01 |
+| Success condition | A reviewer can traverse the complete chain from problem and source evidence to requirements, operational approvals, sprint, execution scope, code, tests, human reviews, limitations, and release hash, then inspect a fair immutable comparison with the direct baseline. |
+| Likely failure conditions | Unverified requirement, `stale` approval request, failed/missing test, unresolved condition/risk, incomplete review, mutable/missing link, prohibited content in proposed evidence, unequal comparison controls, missing result hash, or rubric mismatch. |
+| Recovery path | Show the exact blocker, add safe immutable evidence or superseding version, rerun verification, obtain current approvals, quarantine/remove prohibited content, and issue a new release version rather than mutate a record. If comparison inputs/rubric differ, mark it incomparable and append a newly controlled result; never rewrite a score. |
+| Requirement IDs | FR-041, FR-043, HC-007, SEC-001, SEC-004, SEC-011, SC-10, DEMO-001 |
+| Backlog IDs | S5-US06, S6-US03, S6-US04, S6-SEC01, S6-TEST01 |
 | Relevant state transitions | Release `draft → verifying → approval_pending → approved → recorded`; blocker returns to `draft`; approval request follows canonical states; release record is immutable after `recorded`. |
 
 ## Functionality boundary for the demonstration
@@ -420,19 +440,20 @@ The visible narrative is:
 
 The demonstration loses its product or assurance story if any of these are mocked:
 
-1. Authentication, organisation/project tenancy, application authorisation, tenant-aware FKs, RLS, audit and outbox.
+1. Better Auth through direct Fastify, internal-principal conversion, organisation/project tenancy, application authorisation, tenant-aware FKs, RLS, audit and outbox.
 2. Secure, expiring, revocable project-scoped guest invitation and direct next-action guest UX.
 3. Human and AI questions, assignments, autosaved/resumable responses, follow-ups, and comments.
 4. Persistent human/import/AI origin labels and human control over every proposal.
 5. Immutable evidence fragments, superseding corrections, exact evidence links, artifact versions, and content hashes.
-6. Deterministic readiness, exact approval snapshots, configured reviewers, four approval decisions, and staleness.
+6. Deterministic readiness, exact immutable approval snapshots, configured reviewers, four approval decisions, approval-request staleness, and historical snapshot/decision preservation.
 7. Backlog and sprint with links to approved requirements and acceptance criteria.
-8. Exact execution plan and approval; one execution cycle per approved plan version; final authority rechecks.
-9. Short-lived capability, separate isolated runner, repository/commit/branch/path/network/tool/secret/limit enforcement, denied-action behaviour, checkpoints and cancellation.
+8. Exact execution plan and approval; one execution cycle per approved plan version; atomic active work-item claims preventing overlap; final authority rechecks; claim retention/release rules.
+9. Short-lived capability, separate isolated runner, repository/commit/branch/path/network/tool/secret/limit enforcement, denied-action behaviour, checkpoints and cancellation with validated `runner_graceful_shutdown_seconds`.
 10. Safe activity streaming, exact stop reasons, automated tests, structured work report, code/file records, idempotent commit/PR reconciliation, cleanup and human reviews.
 11. Change-control impact, immutable release evidence, and full requirement-to-release traceability.
 12. Persistent no-patient-information guidance, input/upload filtering and quarantine, privacy-incident handling, and tests.
 13. Desktop/mobile, keyboard, screen-reader, plain-language, technical-detail and no-false-completion acceptance criteria.
+14. The controlled immutable Direct-to-Codex versus platform-assisted comparison, reproducible rubric, read-only results screen/report, accessible limitations, and no baseline authority confusion.
 
 ### May be deliberately simplified
 
@@ -442,6 +463,7 @@ These simplifications preserve the product story and must be labelled honestly:
 - Light mode with one fixed project approval policy and one fixed execution/review policy; Standard and High-Assurance policies remain implemented and tested but need not dominate the live walkthrough.
 - One sprint, one execution-plan version/cycle, one planned checkpoint and one pull request in the happy path.
 - One configured OpenAI provider/model per AI function, while provider/model/prompt versions and usage are still stored.
+- One controlled comparison fixture/model profile and one versioned scoring rubric; immutable inputs/results and real metric collection may not be replaced by hand-authored favourable scores.
 - Manually triggered generation and execution; no automatic sprint scheduling.
 - SMTP and in-app notifications without SMS or collaboration-suite integrations.
 - A single reference self-hosted topology using PostgreSQL, Redis, S3-compatible storage/MinIO, and a separate runner host/provider.
@@ -449,6 +471,6 @@ These simplifications preserve the product story and must be labelled honestly:
 
 ## Presenter and recovery notes
 
-Before every rehearsal, reset only the dedicated demo tenant and fixture repository through approved repeatable tooling, verify the fixed commit and GitHub App permissions, run the no-cross-tenant suite, confirm the email catcher and model budget, and verify that no fixture contains patient-identifiable information. Pre-create recovery fixtures for expired invitation, stale approval, denied file, checkpoint, failed test, and duplicate execution request so failure behaviour can be demonstrated without weakening controls.
+Before every rehearsal, reset only the dedicated demo tenant, comparison records and fixture repository through approved repeatable tooling; verify the comparison input/base-commit/model/limits/rubric hashes and GitHub App permissions; run the no-cross-tenant suite; confirm the email catcher and model budget; and verify that no fixture contains patient-identifiable information. Pre-create recovery fixtures for expired invitation, stale approval request, active work-item claim conflict, denied file, checkpoint, failed test, cancellation-grace expiry, and duplicate execution request so failure behaviour can be demonstrated without weakening controls.
 
 The presenter must never bypass a gate to preserve timing. If an external provider is unavailable, show the recorded failed/retryable state and continue with the documented human fallback; do not substitute screenshots for controls listed as fully functional.

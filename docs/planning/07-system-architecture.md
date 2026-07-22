@@ -30,7 +30,7 @@ docs/
   planning/
 ```
 
-Use pnpm workspaces and Turborepo for task graph, affected builds, and local caching. Do not enable remote caching initially. Pin Node/package manager versions and commit the lockfile.
+Use pnpm workspaces and Turborepo for task graph, affected builds, and local caching. Do not enable remote caching initially. Pin Node/package manager versions and commit the lockfile. The root task graph includes `docs:validate`, and required CI runs it independently of application build/test jobs.
 
 ## Runtime responsibilities
 
@@ -43,7 +43,7 @@ Use pnpm workspaces and Turborepo for task graph, affected builds, and local cac
 
 ### `apps/api`
 
-- Better Auth handler at Fastify boundary, session/principal construction, CSRF/origin controls.
+- Better Auth `1.6.23` handler mounted directly at the Fastify boundary, Drizzle/PostgreSQL database-session verification, internal principal construction, and CSRF/origin controls. Every Better Auth package uses that patch; cookie session caching remains disabled for immediate revocation.
 - REST/OpenAPI endpoints and SSE event projection.
 - Application services, permission checks, transaction/RLS context, domain invariants.
 - Webhook raw-body verification/inbox acceptance.
@@ -116,6 +116,7 @@ flowchart TB
 Representative endpoints:
 
 ```text
+ALL  /api/auth/*
 POST /api/v1/organisations
 POST /api/v1/projects
 POST /api/v1/projects/{projectId}/invitations
@@ -131,7 +132,13 @@ POST /api/v1/execution-plan-versions/{versionId}/cycles
 POST /api/v1/execution-cycles/{cycleId}:cancel
 POST /api/v1/execution-checkpoints/{checkpointId}/decisions
 POST /api/v1/releases/{releaseId}/versions
+POST /api/v1/projects/{projectId}/demonstration-comparisons
+GET  /api/v1/demonstration-comparisons/{comparisonId}
 ```
+
+`/api/auth/*` is owned by the directly mounted Better Auth Fastify handler. Application APIs accept only the resulting internal principal; they never consume Better Auth role claims as business authority.
+
+The demonstration comparison command is enabled only for the dedicated synthetic demo tenant/fixture capability. Its request pins `scenarioKey`, `fixtureVersion`, original-idea hash, and exact platform-assisted plan/execution/release manifest. The read contract returns immutable `demonstration_comparison_results` with two labelled arms and metrics for unsupported assumptions, missing requirements/questions/criteria, corrections, discovered/prevented items, acceptance-criterion coverage, stakeholder-confidence evidence, and requirement-to-code-to-test traceability. It cannot create an execution cycle, approval, or runner capability.
 
 ### SSE
 
@@ -170,13 +177,13 @@ sequenceDiagram
     Consumer->>DB: Deduplicate inbox/idempotency + apply result
 ```
 
-The outbox applies to notifications, AI jobs, readiness re-evaluation, approval staleness, runner authorisation/provisioning, tests/reports/reviews, GitHub operations, integration delivery, and retention. Redis loss must not lose authoritative intent.
+The outbox applies to notifications, AI jobs, readiness re-evaluation, approval-request staleness, work-item claim acquisition/release, runner authorisation/provisioning, tests/reports/reviews, demonstration comparison generation, GitHub operations, integration delivery, and retention. Redis loss must not lose authoritative intent.
 
 ## Background job architecture
 
 Queue groups:
 
-- `ai`: generation, extraction, conflicts, backlog, evaluation.
+- `ai`: generation, extraction, conflicts, backlog, evaluation, `demo.generate-comparison`.
 - `notifications`: in-app fanout, SMTP, digests.
 - `integrations`: GitHub/OpenAI webhooks, reconciliation, outbound hooks.
 - `attachments`: validation/scanning/quarantine/purge.
@@ -203,7 +210,7 @@ sequenceDiagram
     Owner->>API: Request cycle for approved execution-plan version
     API->>DB: Unique cycle in requested state
     Worker->>API: execution.authorise
-    API->>DB: Transaction lock/recheck → queued + hashed grant + audit/outbox
+    API->>DB: Transaction lock/recheck + active claims → queued + grant + audit/outbox
     Worker->>Provisioner: runner.provision
     Provisioner->>Runner: Create isolated environment
     Runner->>API: Attest environment + scope
@@ -233,19 +240,21 @@ sequenceDiagram
     else Stop or finalise
         Worker->>Runner: Run approved tests/report
         Runner->>GitHub: Commit/PR only if permitted
-        API->>DB: Revoke grant → reporting → awaiting_review
+        API->>DB: Revoke grant, report, await review, retain claims
         Worker->>Runner: Cleanup
         API-->>Reviewer: Technical/stakeholder review
+        Reviewer->>API: Required outcome decision
+        API->>DB: Terminal state + authorised claim release + audit/outbox
     end
 ```
 
-Cancellation revokes capability/secret leases before the 30-second graceful stop. Hard kill and idempotent cleanup follow. Cleanup failure creates `recovery_required` and an operator runbook action.
+Cancellation revokes capability/secret leases before waiting the configured `runner_graceful_shutdown_seconds` interval (default `30`, valid `5`–`120`). Hard kill and idempotent cleanup follow. Safe cancellation releases exact work-item claims in its terminal transaction. Cleanup failure creates `recovery_required`, retains the claims, and creates an operator runbook action.
 
 ## Storage
 
 ### PostgreSQL
 
-Authoritative state, transactions, RLS, versions, relationships, policies, decisions, usage, audit, inbox/outbox. One database/schema initially; module table ownership remains explicit. Use read replicas only after measured need and never for authority checks that require current state.
+Authoritative state, transactions, RLS, versions, relationships, policies, decisions, active work-item claims, usage, immutable demonstration comparison results, audit, inbox/outbox. One database/schema initially; module table ownership remains explicit. Use read replicas only after measured need and never for authority checks that require current state.
 
 ### Redis
 
@@ -264,7 +273,11 @@ Private objects for attachments, exports, encrypted raw AI/runner output, patche
 
 ## Authentication integration
 
-Better Auth is mounted directly at the Fastify boundary using its Drizzle adapter and stable first-party plugins for magic link/MFA as selected. Do not couple controllers to a community Nest guard package. Convert verified sessions into an internal principal; the permission service and RLS context remain application-owned. OIDC/SAML/SCIM are later adapters.
+Better Auth `1.6.23` is the selected adapter, with every core/plugin package pinned to the same patch. It is mounted directly at `/api/auth/*` on the Fastify instance using its Drizzle/PostgreSQL integration; it is not wrapped by an unstable community NestJS guard and its organisation plugin is not used. Database sessions are authoritative and cookie caching is disabled so revocation/account disablement is observed on the next authenticated request. Magic-link sign-in is the default passwordless path and uses `storeToken: 'hashed'`. First-party passkey and TOTP plugins are enabled, but the system does not assume passwordless sign-in automatically invokes TOTP.
+
+An `AuthenticatedPrincipalFactory` validates the Better Auth session, then creates the internal principal consumed by NestJS controllers/application services. Organisation/project membership, scoped permissions, approval eligibility, and transaction-local RLS context are always resolved from application-owned records. Better Auth `updateAge` is treated as expiry renewal, not token rotation or reauthentication. Recovery/privilege transitions revoke the old session and require a fresh authenticated session. Revoke-one/revoke-all and authenticator recovery/change are security/audit events.
+
+For High-Assurance actions, an application service performs fresh passkey user verification and issues a hashed, one-use `reauthentication_grant` bound to the internal principal, current session, action key, and exact subject/snapshot hash for no more than 15 minutes. The command transaction consumes it atomically. Future OIDC, SAML, and SCIM providers implement the same enterprise identity adapter/principal and reauthentication-evidence contracts.
 
 ## UI system and screen ownership
 
@@ -274,6 +287,15 @@ The product information architecture and measurable UX acceptance criteria are o
 - WCAG 2.2 AA, visible focus, keyboard-first command order, semantic live regions for status/SSE.
 - Safe Markdown and specialised evidence/diff/approval/activity views.
 - Progressive disclosure based on project mode and user task, not role-based hiding of required evidence.
+- The project `Demonstration comparison` screen renders the two labelled arms, attributable metric examples, method/fixture version, and links into the platform evidence chain. It clearly labels the direct baseline as synthetic evaluation, not an authorised project execution.
+
+## Validated runtime configuration
+
+`packages/config` owns one schema consumed by API, worker, runner control, tests, and operator commands. Startup fails closed on missing/invalid security-critical values. `runner_graceful_shutdown_seconds` is an integer with default `30`, minimum `5`, and maximum `120`. The resolved value is included in cancellation intent/audit metadata; it affects only OS-process grace because grants and secret leases are revoked immediately.
+
+Authentication configuration pins Better Auth and every plugin to `1.6.23`, plus base URL/origin allowlist, database connection, cryptographic secret, magic-link SMTP sender with `storeToken: 'hashed'`, passkey relying-party/origins, TOTP issuer, session expiry/renewal settings, cookie-cache-disabled invariant, and reauthentication-grant maximum `900` seconds. Production startup refuses version skew, test secrets, insecure cookies, untrusted origins, unhashed magic-link configuration, cookie session caching, or a grant lifetime above 15 minutes.
+
+The Better Auth database session lookup token is a documented narrow storage exception because no supported hashing option is available. Database roles restrict the session table, storage/backups are encrypted, logging/export/support tooling redacts the value, and tests fail on accidental disclosure. `packages/config` and the ADR explicitly forbid extending this exception to other bearer tokens.
 
 ## Deployment topology
 
@@ -327,7 +349,7 @@ Docker Compose is the first supported operator path on Linux for the application
 
 - Pino-compatible structured JSON logs with correlation, causation, tenant/project opaque IDs, runtime, module, job/cycle, and safe error code.
 - OpenTelemetry traces across HTTP, DB, queue, provider, GitHub, and runner-control boundaries.
-- Metrics: latency/error/saturation, DB pool/query, RLS denials, outbox lag, queue age/retries/dead letters, webhook reconciliation, AI cost/tokens, capability/revocation, runner provision/start/cleanup, denied actions, cycle duration/stop reasons, backup freshness/restore result.
+- Metrics: latency/error/saturation, DB pool/query, RLS denials, outbox lag, queue age/retries/dead letters, webhook reconciliation, AI cost/tokens, active-claim conflicts/age/release reason, capability/revocation, runner provision/start/cleanup, denied actions, cycle duration/stop reasons, backup freshness/restore result.
 - Sentry-compatible error sink optional; sensitive content redacted before export.
 - Health: liveness for process, readiness for required dependencies, dependency-specific diagnostics restricted to operators.
 
@@ -338,6 +360,21 @@ Docker Compose is the first supported operator path on Linux for the application
 - Use expand/backfill/switch/contract; background backfills are idempotent and observable.
 - Web/API/worker compatibility spans the migration window.
 - Back up before high-risk migration and prove restore quarterly.
+
+## Repeatable documentation validation
+
+The root command `pnpm docs:validate` is deterministic, non-interactive, and required in pull-request CI. It validates:
+
+1. Markdown formatting, trailing whitespace, broken relative/file links, and Markdown links;
+2. Mermaid syntax where a deterministic renderer/parser supports the diagram type;
+3. duplicate canonical requirement or backlog definitions; [Product Requirements](01-product-requirements.md) is the requirement registry, while the explicit SC-01–SC-15 executive-summary mirror is allowed only when its IDs/text match exactly;
+4. missing requirement references and missing/unknown demo-step references;
+5. canonical project/workflow state names, including exact use of `plan_in_review` and rejection of unregistered aliases;
+6. canonical approval request/decision, execution-cycle, runner-environment, stop-reason, claim-release, origin, and other enumerated values;
+7. runner/domain/table names that must match the data model, including `execution_work_item_claims`;
+8. initial-release wording that accidentally makes a Legal electronic signature mandatory.
+
+CI executes the validator from a clean checkout and publishes machine-readable diagnostics with file/line/identifier. Validator fixtures contain a known failing example for every rule, and tests prove deterministic ordering/output. Adding a requirement, backlog item, enum, state, table, or demo step is incomplete until its canonical registry/reference map is updated; suppressions require a narrow, reviewed rationale rather than a broad ignore.
 
 ## Alternatives considered
 
@@ -351,6 +388,7 @@ Docker Compose is the first supported operator path on Linux for the application
 | Generic JSON artifact table | Rejected: weak constraints/queryability; common root plus typed extensions chosen. |
 | GraphQL/tRPC | Rejected initially: REST/OpenAPI supports guests, public integrations, commands, and long-term clients clearly. |
 | WebSockets for all activity | Deferred: SSE + REST meets initial one-way activity/command shape. |
+| Custom authentication, Better Auth organisation plugin, or a NestJS community wrapper | Rejected: Better Auth `1.6.23` direct Fastify handler, Drizzle/PostgreSQL sessions, hashed magic link, and first-party passkey/TOTP support meet the initial controls; app-owned membership/authorisation and reauthentication grants cover business and High-Assurance boundaries. |
 | Keycloak from day one | Deferred: operationally heavy for two-person self-hosting; enterprise IdP integration remains a port. |
 | Repository execution in BullMQ worker | Rejected: violates runner trust boundary and increases blast radius. |
 | Provider-hosted prompt objects | Rejected: prompts remain code-versioned and evaluated with the application. |

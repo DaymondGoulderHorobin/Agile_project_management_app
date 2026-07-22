@@ -18,6 +18,7 @@ Future Waterfall, hybrid, and organisation templates reuse the same definition/v
 - Approvals apply to exact hashes and dependency manifests.
 - AI cannot approve, review its own work, or change authority.
 - One execution cycle per approved execution-plan version.
+- At most one active `execution_work_item_claims` row per organisation/work item, acquired atomically during authorisation and retained through required review or explicit authorised release.
 - Authority recheck before execution and resumption.
 - Runner capability cannot exceed the approved execution plan.
 - Completion requires configured tests and human reviews.
@@ -32,6 +33,8 @@ Future Waterfall, hybrid, and organisation templates reuse the same definition/v
 - Readiness criteria and warning/blocking severity.
 - Execution limit defaults within operator maximums.
 - Notification routing and escalation times.
+
+Operator runtime configuration is validated separately from project policy. `runner_graceful_shutdown_seconds` defaults to `30` and is allowed only from `5` through `120`; it controls process termination grace but never delays capability, session, or secret revocation.
 
 ## Agile workflow
 
@@ -53,6 +56,8 @@ flowchart LR
 ```
 
 Light mode can omit separate sprint approval and combine developer/stakeholder project-plan requirements when policy permits. It cannot omit execution-plan approval, authority rechecks, scope enforcement, or required outcome review.
+
+The demonstration overlays a read-only direct-to-Codex baseline comparison on this workflow. That baseline receives only the original synthetic idea, produces evaluation evidence in the dedicated demo tenant/repository, and cannot create approvals, capabilities, cycle transitions, or releases. The platform-assisted arm follows every workflow state and control shown here.
 
 ## Project workflow states
 
@@ -76,7 +81,7 @@ These are presentation/workflow states. Artifact, approval, sprint, execution, a
 
 **Project approval** is an authenticated operational decision against an immutable `approval_snapshot`. It proves who acted, their authority at that time, their decision, conditions/comments, and the exact canonical payload/hash.
 
-**High-Assurance project approval** uses the same engine and can require recent MFA/reauthentication, distinct principals, separation of duties, stronger evidence/readiness rules, and additional reviewers. It remains an operational project control, not a Legal electronic signature.
+**High-Assurance project approval** uses the same engine and can require an application-owned, one-use `reauthentication_grant` bound to the exact action and snapshot hash after fresh passkey user verification, distinct principals, separation of duties, stronger evidence/readiness rules, and additional reviewers. The grant expires within 15 minutes and does not turn the operational decision into a Legal electronic signature.
 
 **Legal electronic signature** is a future optional module. No initial workflow waits for it, no initial approval state implies it, and no initial acceptance criterion depends on it.
 
@@ -100,7 +105,7 @@ Defaults:
 
 - Light: role aggregation allowed unless a policy forbids it.
 - Standard: distinct people for technical and stakeholder approval where both requirements exist.
-- High-Assurance: distinct people and recent MFA/reauthentication; the author cannot satisfy configured independent-review requirements.
+- High-Assurance: distinct people and a current app-owned reauthentication grant after fresh Better Auth passkey user verification; the author cannot satisfy configured independent-review requirements. Magic-link sign-in is not assumed to trigger TOTP, and Better Auth `updateAge` is not accepted as reauthentication or token rotation.
 
 A later role change does not rewrite historical decisions. It can invalidate their use for future execution if current authority is a configured prerequisite.
 
@@ -137,12 +142,12 @@ sequenceDiagram
     Approval-->>Owner: State, conditions, blockers, outstanding reviewers
 ```
 
-## Approval staleness and invalidation
+## Approval-request staleness and authority invalidation
 
 ### Rules
 
 1. A changed subject always creates a new subject version.
-2. If the canonical content/dependency hash changes, the old snapshot remains immutable.
+2. If the canonical content/dependency hash changes, the old snapshot remains immutable and has no mutable staleness field.
 3. The impact service determines which approval requests depend on the changed version.
 4. Relevant requests become `stale` with a reason and replacement link.
 5. Decisions remain queryable as historical facts but cannot satisfy the new request.
@@ -154,7 +159,7 @@ Revocation is not a decision or request state. An authorised revoker appends `ap
 
 ### Concurrency
 
-Opening, deciding, staling, and authorising use expected state/`lock_version`. The decision transaction locks the request and requirement rows, rejects stale snapshots, inserts one immutable decision, recalculates request state, and writes audit/outbox atomically.
+Opening, deciding, staling, and authorising use expected state/`lock_version`. The decision transaction locks the request and requirement rows, rejects a request that is `stale` or whose immutable snapshot is no longer usable as current authority, validates and consumes any required action/snapshot-bound `reauthentication_grant`, inserts one immutable decision, recalculates request state, and writes audit/outbox atomically. It never mutates the snapshot.
 
 ## Readiness
 
@@ -216,7 +221,7 @@ flowchart TD
     H --> I["Impact graph over versions, approvals, work, cycles, releases"]
     I --> M{"Class"}
     M -->|minor| L["Limited review; preserve unaffected approvals"]
-    M -->|material| V["New versions + stale approvals + affected-cycle stop"]
+    M -->|material| V["New versions + stale approval requests + affected-cycle stop"]
     M -->|fundamental| D["Return to discovery + new plan"]
 ```
 
@@ -224,7 +229,7 @@ An authorised downgrade from the suggested/highest automatic match requires a wr
 
 ## Sprint approval
 
-Sprint approval is optional by preset/policy, but the sprint must always link exact work-item and requirement/criterion versions. Opening sprint review freezes an immutable sprint-plan snapshot. Changes to committed work, goal, dependencies, or acceptance links stale its approval when configured.
+Sprint approval is optional by preset/policy, but the sprint must always link exact work-item and requirement/criterion versions. Opening sprint review freezes an immutable sprint-plan snapshot. Changes to committed work, goal, dependencies, or acceptance links mark the corresponding approval request `stale` when configured; they do not mutate the snapshot or decisions.
 
 ## Execution-plan approval
 
@@ -240,7 +245,7 @@ An execution-plan version cannot enter an approval request without:
 - turn, task, token, cost, and time limits;
 - report/review requirements.
 
-One approved execution-plan version may create one cycle. A stopped/failed/completed cycle is never “retried” as a second cycle against the same version. New authorised work requires a new execution-plan version.
+One approved execution-plan version may create one cycle. A stopped/failed/completed cycle is never “retried” as a second cycle against the same version. New authorised work requires a new execution-plan version. This per-version uniqueness is necessary but not sufficient: authorisation must also acquire one active `execution_work_item_claims` row for every selected work item, atomically.
 
 ## Canonical execution-cycle workflow
 
@@ -278,6 +283,19 @@ The state `awaiting_review` includes successful work, partial work, limit stops,
 
 Runner environments have a separate lifecycle: `requested → creating → ready → active → revoking → destroying → destroyed`, with `cleanup_failed → destroying` for idempotent retry or manual recovery. Cycle and environment transitions are correlated but never collapsed into one status.
 
+## Active work-item claim lifecycle
+
+During `execution.authorise`, one transaction locks the `requested` cycle, execution-plan version and selected work-item rows, transitions through `authorising`, then inserts the full `execution_work_item_claims` set. The partial unique constraint on `(organisation_id, work_item_id) WHERE released_at IS NULL` makes concurrent authorisation deterministic. A conflict aborts the complete transaction, so the cycle remains `requested`; a separate idempotent denial transaction records safe audit/outbox evidence. No partial claim, capability, environment, or runner job is created.
+
+Claims remain active in `queued`, `provisioning`, `running`, `checkpoint_waiting`, `human_input_required`, `testing`, `reporting`, `awaiting_review`, and `recovery_required`. They release only when:
+
+1. required review completes and the authorised terminal command records `required_review_completed`;
+2. cancellation has revoked authority, stopped the runner, and completed safe cleanup, recording `safely_cancelled`;
+3. an authorised recovery decision verifies capability/secret revocation and environment containment for a failed/recovery case, then records `authorised_failure_recovery`; or
+4. an authorised change process removes the work item, safely stops/contains the affected cycle, and records `authorised_change_removed_work`.
+
+Process exit, test failure, timeout, report creation, runner destruction, or transition to `recovery_required` never releases a claim by itself. Acquisition, conflict, and release write audit and outbox events. Repository-path overlap detection may warn but is not an authority control in the first implementation.
+
 ## Authority-change behaviour
 
 | Event | Before runner starts | While runner is active/suspended |
@@ -291,7 +309,8 @@ Runner environments have a separate lifecycle: `requested → creating → ready
 | Token/cost/turn/task/time limit | Prevent start if invalid/zero budget | Controlled stop, report partial result, `awaiting_review` with exact reason |
 | Tests fail | Not applicable | Preserve results, report, request review; never `completed` |
 | Human decision requested | Not applicable | `human_input_required`; revoke capability and recheck before issuing a renewed grant to resume |
-| Cancellation | `→ cancelling → cancelled` | Revoke immediately, graceful stop, hard kill after 30 seconds, cleanup |
+| Work item already actively claimed | Authorisation transaction rolls back to `requested`; no capability/environment and no partial claims | Existing claimant remains visible to authorised users; retry the same cycle only after an authorised release |
+| Cancellation | `→ cancelling → cancelled` | Revoke immediately, graceful stop for configured `runner_graceful_shutdown_seconds` (default `30`, bounds `5`–`120`), hard kill, cleanup, then release claims |
 | Runner crash | Retry provision/start before side effects | Preserve workspace/patch, `recovery_required`; no automatic Codex rerun |
 | Duplicate execution request | Return existing cycle via unique/idempotency rule | Return existing cycle; no new job/environment/PR |
 
@@ -320,6 +339,8 @@ Every lifecycle transition transaction:
 5. appends a versioned outbox event;
 6. commits before external work begins.
 
+The `authorising → queued` transaction additionally acquires the complete active work-item claim set and creates capability metadata. A claim-release transaction additionally verifies one of the four authorised release grounds, sets `released_at`/`release_reason` once, and emits `execution_work_item_claim.released`. Neither transaction can succeed partially.
+
 External operations use durable intent and reconciliation. Retrying a branch, commit, PR, report upload, notification, or cleanup first checks the recorded intent and external state.
 
 ## Review checkpoints
@@ -333,3 +354,5 @@ A release snapshot includes exact requirement versions, work items, code changes
 ## Future methodology support
 
 Waterfall and hybrid templates may add stage/state arrangements and policy presets. They cannot change core evidence/version/approval/execution/release invariants. A future custom workflow builder must validate definitions against those invariants and version every published change.
+
+The repeatable `pnpm docs:validate` CI gate treats this document as the canonical source for project state `plan_in_review`, execution-cycle/environment states, approval request/decision enums, stop reasons, and claim release reasons. Every unregistered alias fails validation.

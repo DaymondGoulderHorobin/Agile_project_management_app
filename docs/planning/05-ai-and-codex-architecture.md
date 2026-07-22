@@ -31,6 +31,7 @@ Authoritative tables: [Data Model](03-data-model.md)
 | Readiness explanation | Interactive over deterministic results | Advisory explanation | Cannot alter rule outcome |
 | Codex execution | Always asynchronous isolated runner | Code/actions/tests/report | Requires prior and subsequent human control |
 | Work report generation | Runner stage | Structured report + plain/technical summaries | Reviewers decide outcome |
+| Demonstration comparison | Asynchronous synthetic evaluation | Direct-to-Codex baseline and platform-assisted metrics/report | Human-reviewed demo evidence only; never authority |
 
 Interactive calls are bounded, read-only suggestions expected to complete quickly. Work that produces multiple persistent proposals, has retry/cancellation needs, can run longer than a request, or consumes significant budget uses BullMQ. Codex always runs outside the API/worker process.
 
@@ -96,11 +97,20 @@ Before provider forwarding:
 - audit/log/notification payloads contain only safe incident identifiers and actions;
 - detection is explicitly a safety aid, not a guarantee or healthcare-compliance control.
 
+## Direct-to-Codex baseline comparison
+
+The canonical demonstration runs a controlled evaluation with two arms against the same versioned synthetic `general_business` scenario and deterministic fixture repository:
+
+1. **Direct-to-Codex baseline:** receives only the original project idea, without discovery questions, stakeholder answers, evidence, structured requirements, acceptance criteria, plan approval, or production runner authority. Its output is inspected for unsupported assumptions, missing requirements, domain questions not asked, missing acceptance criteria, and corrections requested after stakeholder review.
+2. **Platform-assisted:** uses the exact discovery evidence, reviewed artifacts, approved plan, backlog/sprint, approved execution plan, restricted cycle, tests, and reviews. Its result records requirements discovered, assumptions prevented, acceptance-criterion coverage, corrections required, stakeholder-confidence evidence, and requirement-to-code-to-test traceability.
+
+`demonstration_comparisons` owns the synthetic scenario/fixture and exact input manifests. Each final `demonstration_comparison_results` version is immutable, hashed, and superseded rather than edited. `demo.generate-comparison` produces the structured report and plain-language results projection using deterministic fixtures by default; an optional evaluated live-provider run is labelled separately. The baseline is restricted to the dedicated demo tenant/repository and is not an endpoint that bypasses execution-plan approval or capability issuance.
+
 ## Job design
 
 ### General AI jobs
 
-`ai_jobs.idempotency_key` is derived from organisation, use case, prompt version, model profile, and canonical input hash. A completed equivalent job may be reused only when freshness policy permits. Jobs use bounded exponential backoff with jitter for transient provider/rate errors, no retry for invalid schema input/safety refusal, and explicit cancellation state.
+`ai_jobs.idempotency_key` is derived from organisation, use case, prompt version, model profile, and canonical input hash. A completed equivalent job may be reused only when freshness policy permits. Jobs use bounded exponential backoff with jitter for transient provider/rate errors, no retry for invalid schema input/safety refusal, and explicit cancellation state. The demo comparison job uses `demo-comparison:{comparison_id}:{method_version}:{input_hash}` and writes a new immutable result only after both manifests validate.
 
 Long Responses API work can use provider background execution, status retrieval, cancellation, and verified webhook events where appropriate; see [Background mode](https://developers.openai.com/api/docs/guides/background) and [Webhooks](https://developers.openai.com/api/docs/guides/webhooks). BullMQ remains the application’s durable coordinator and reconciles provider state after missed/duplicate callbacks.
 
@@ -116,6 +126,8 @@ flowchart LR
     WI --> EPV["Execution-plan version"]
     EPV --> APS["Approval snapshot"]
     APS --> EC["One execution cycle"]
+    WI --> CL["Exclusive active claims"]
+    CL --> EC
     EC --> RE["Runner environment"]
     RE --> AR["Agent run(s)"]
     AR --> AT["Agent turns"]
@@ -128,7 +140,7 @@ flowchart LR
 
 One cycle may contain multiple Codex turns and, after a recoverable process restart, more than one `agent_run`. It cannot contain work outside the approved version. Resumption after a checkpoint stays in the same cycle only if scope/limits/authority remain valid.
 
-The lifecycle persists through the canonical records `execution_plans`, `execution_plan_versions`, `execution_cycles`, `execution_cycle_work_items`, `runner_capability_grants`, `runner_environments`, `agent_runs`, `agent_turns`, `agent_actions`, `execution_checkpoints`, `execution_usage_events`, `execution_test_runs`, `execution_work_reports`, `execution_reviews`, `code_changes`, and `changed_files`. No runtime-only state may substitute for these authoritative records; detailed constraints are in [03-data-model.md](./03-data-model.md).
+The lifecycle persists through the canonical records `execution_plans`, `execution_plan_versions`, `execution_cycles`, `execution_cycle_work_items`, `execution_work_item_claims`, `runner_capability_grants`, `runner_environments`, `agent_runs`, `agent_turns`, `agent_actions`, `execution_checkpoints`, `execution_usage_events`, `execution_test_runs`, `execution_work_reports`, `execution_reviews`, `code_changes`, and `changed_files`. No runtime-only state may substitute for these authoritative records; detailed constraints are in [03-data-model.md](./03-data-model.md).
 
 The canonical cycle path is `requested → authorising → queued → provisioning → running → checkpoint_waiting | human_input_required | testing → reporting → awaiting_review → completed`, with `cancelling → cancelled`, `failed`, and `recovery_required` as exceptional outcomes. The separate environment path is `requested → creating → ready → active → revoking → destroying → destroyed`, with `cleanup_failed` as its exception.
 
@@ -140,11 +152,11 @@ An execution-plan approval request reaches `approved`. Its immutable snapshot in
 
 ### 2. Final authority and approval recheck
 
-`execution.authorise` transitions the cycle `requested → authorising`. In one transaction it locks the cycle, plan version, snapshot/request, policy result, any `approval_revocations`, required memberships/authorities, repository mapping, and idempotency record. It rejects stale/withdrawn/revoked approval authority, consumed plan version, unresolved conditions, invalid membership, open prohibited-content blocker, or inaccessible repository.
+`execution.authorise` performs `requested → authorising` inside one transaction while locking the cycle, plan version, approval request and immutable snapshot, policy result, any `approval_revocations`, required memberships/authorities, repository mapping, selected work items, and idempotency record. It inserts the complete `execution_work_item_claims` set before queuing. The partial unique active-claim index turns a race into an atomic conflict; rollback leaves the cycle `requested` and removes the entire attempted claim set. A separate idempotent transaction records a safe denial. It rejects a `stale`/withdrawn request or use of a snapshot whose corresponding request is not current authority, consumed plan version, unresolved conditions, invalid membership, open prohibited-content blocker, inaccessible repository, or any already-claimed work item.
 
 ### 3. Short-lived runner capability issued
 
-On success, the same transaction creates the logical `runner_environments` row in `requested`, records a hashed opaque grant bound to that row and its exact scope hash/expiry, transitions `authorising → queued`, and appends audit/outbox. After commit, the raw token is placed in a sealed one-use broker handoff; it is delivered only inside the attested created environment, never returned to the application UI, logged, or stored in plaintext, and is renewable only after another authority recheck.
+On success, the same transaction creates the logical `runner_environments` row in `requested`, records a hashed opaque grant bound to that row and its exact scope hash/expiry, transitions `authorising → queued`, and appends claim-acquired, cycle, audit, and outbox records. After commit, the raw token is placed in a sealed one-use broker handoff; it is delivered only inside the attested created environment, never returned to the application UI, logged, or stored in plaintext, and is renewable only after another authority recheck.
 
 ### 4. Isolated runner environment created
 
@@ -212,7 +224,7 @@ The grant is revoked before cleanup or human wait. Renewal stops. GitHub/provide
 
 ### 20. Human review requested
 
-The cycle transitions `reporting → awaiting_review`; `execution.request-review` notifies configured technical and stakeholder reviewers. `completed` additionally requires `stop_reason = completed`, required tests passed, complete report evidence, revoked grants, destroyed environments, and required reviews passed. A reviewed incomplete or failed result transitions to `failed` with its exact stop reason.
+The cycle transitions `reporting → awaiting_review`; `execution.request-review` notifies configured technical and stakeholder reviewers. Active work-item claims remain held. `completed` additionally requires `stop_reason = completed`, required tests passed, complete report evidence, revoked grants, destroyed environments, and required reviews passed. The authorised completion transaction records `required_review_completed`, releases the claims, and appends audit/outbox atomically. A reviewed incomplete or failed result transitions to `failed` with its exact stop reason, but its claims remain until an authorised failure-recovery decision explicitly releases them.
 
 ## Runner sequence
 
@@ -231,7 +243,7 @@ sequenceDiagram
     API->>DB: Unique idempotent requested cycle
     API->>Queue: Outbox schedules execution.authorise
     Queue->>API: Authorise
-    API->>DB: Lock + recheck + queued + capability grant + audit/outbox
+    API->>DB: Lock + recheck + active claims + queued + grant + audit/outbox
     Queue->>Control: runner.provision
     Control->>Runner: Create isolated environment + one-time capability
     Runner->>GitHub: Short-lived authorised checkout
@@ -249,6 +261,8 @@ sequenceDiagram
     API->>DB: Revoke capability + awaiting_review
     Queue->>Control: Destroy environment
     API-->>Reviewers: Request technical/stakeholder review
+    Reviewers->>API: Required outcome decisions
+    API->>DB: Terminal decision + authorised claim release + audit/outbox
 ```
 
 ## Continuous limit and policy enforcement
@@ -260,6 +274,7 @@ sequenceDiagram
 - Usage ledger atomically increments and returns `continue`, `warn`, or `stop`.
 - The controller subscribes to approval/membership/change/repository revocation events and also polls/reconciles in case events are missed.
 - Capability expiry is short; renewal is online and fails closed.
+- The controller verifies that every selected work item retains an active claim for the current cycle before starting or resuming. It never creates or releases claims from runner events.
 
 ## Failure and recovery matrix
 
@@ -271,6 +286,7 @@ sequenceDiagram
 | Required stakeholder leaves | Future authority invalid; same cancellation policy | No automatic substitution | Policy owner appoints reviewer and opens new approval |
 | Repository permission changes | Stop new actions and reconcile | Bounded transient retry | Restore exact access or cancel/new plan |
 | Affected material change approved | Revoke/cancel | No | Impact graph + new plan/execution-plan version |
+| Selected work item already claimed | Roll back complete authorisation transaction to `requested`; no capability/environment/partial claims | Retry same cycle only after authorised release | Safe conflict plus separate idempotent denial audit/outbox; existing claimant unchanged |
 | Blocked file | Deny, `agent_action_denied`, `human_input_required` | No | Reviewer narrows task or creates new plan; never auto-widen |
 | Unauthorised network | Enforced deny, same stop path | No | Safe target metadata, security review |
 | Token/cost/turn/task/time limit | Controlled stop → tests/report/`awaiting_review`; after review, `failed` | No | Exact counter/threshold and partial work |
@@ -278,11 +294,12 @@ sequenceDiagram
 | Codex asks for judgement | `human_input_required`, capability revoked | Resume only with a renewed grant after recorded input + recheck | Checkpoint record |
 | Crash before side effects | Mark failed attempt; retry provision/start up to 3 | Exponential backoff+jitter | Attempt/environment events |
 | Crash after side effects | `recovery_required` | Never auto-rerun Codex | Preserve patch/workspace; operator reconcile |
-| Cancellation requested | `cancelling`, revoke, graceful stop 30s | Cleanup retry | Cancellation actor/reason and final report if possible |
+| Cancellation requested | `cancelling`, revoke, graceful stop for `runner_graceful_shutdown_seconds` (default 30, bounds 5–120) | Cleanup retry | Cancellation actor/reason, effective grace and final report if possible; release claims only after safe cancellation |
 | Graceful cancellation times out | Hard-kill and cleanup | Cleanup retry | `user_cancelled`; operator alert if cleanup fails |
 | Duplicate cycle request | Return unique existing cycle | Not applicable | Idempotency record |
 | Duplicate branch/commit/PR job | Reconcile durable intent/external marker | Safe bounded retry | Existing `code_changes` result reused |
-| Cleanup failure | Secrets revoked; environment `cleanup_failed`, cycle `recovery_required` | Backoff then manual | Operator alert and cleanup runbook |
+| Cleanup failure | Secrets revoked; environment `cleanup_failed`, cycle `recovery_required`; retain claims | Backoff then manual | Operator alert and cleanup runbook; no implicit claim release |
+| Failed/recovery-required outcome | Retain claims after report/review | No automatic release | Authorised recovery command may preserve/abandon work and release with `authorised_failure_recovery` |
 
 ## Queue and idempotency contract
 
@@ -301,6 +318,8 @@ BullMQ exhaustion moves the job to a dead-letter/recovery workflow, not silent f
 
 Every state transition uses expected state and `lock_version`, appends audit/outbox in the same transaction, and commits before an external call. Usage increments and hard-limit decisions are atomic. Provider/GitHub/runner callbacks enter a deduplicated inbox and are applied in a new transaction.
 
+Claim acquisition is part of `execution.authorise`: all selected rows insert or none do. Claim release is a separate explicit domain command in the terminal review, safe-cancellation, authorised-recovery, or authorised-change transaction. Failure recovery proves capability/secret revocation and environment containment first; authorised change removal safely stops/contains the affected cycle first. If an acquisition uniqueness conflict rolls back, a separate idempotent transaction records the safe denial/audit outcome; it cannot issue a capability or mutate the existing claim.
+
 No database transaction remains open while awaiting OpenAI, GitHub, object storage, container provisioning, command execution, tests, or human review.
 
 ## Event and audit model
@@ -308,6 +327,7 @@ No database transaction remains open while awaiting OpenAI, GitHub, object stora
 Safe event categories:
 
 - `execution_cycle.*`
+- `execution_work_item_claim.acquired|conflict|released`
 - `runner_environment.*`
 - `runner_capability.issued|renewed|revoked|expired`
 - `agent_run.*`, `agent_turn.*`, `agent_action.*`, `agent_action_denied`
@@ -323,7 +343,7 @@ Audit stores identity, authority, aggregate/version, safe target summary, policy
 
 ## Cancellation and manual recovery
 
-Cancellation is an idempotent command. It immediately revokes the grant, secret leases, and renewal before signalling the process. After 30 seconds the supervisor hard-kills the process. Cleanup then destroys compute/network/workspace. A failed cleanup creates an operator-visible `recovery_required` case.
+Cancellation is an idempotent command. It immediately revokes the grant, secret leases, and renewal before signalling the process. The supervisor waits the validated `runner_graceful_shutdown_seconds` value—default `30`, allowed `5` through `120`—then hard-kills the process. Cleanup then destroys compute/network/workspace. A failed cleanup creates an operator-visible `recovery_required` case and retains every work-item claim.
 
 Cleanup guarantees are fail-closed:
 
@@ -332,6 +352,7 @@ Cleanup guarantees are fail-closed:
 - `completed` and `cancelled` require no valid grant/secret lease and every created environment to be `destroyed`; a pre-provision cancellation may have no environment. Otherwise the cycle remains `cancelling` or `recovery_required`;
 - `cleanup_failed` is never silently terminal: bounded backoff, operator alert, and periodic `execution.reconcile` continue until the exact environment is destroyed or an operator records an exceptional containment decision;
 - workspace/patch evidence needed for authorised review is encrypted/preserved before destruction, but preservation never keeps an execution capability valid.
+- claims release only after safe cancellation reaches its authorised terminal transaction; cleanup failure or `recovery_required` keeps them active.
 
 The manual runbook must let an operator:
 
@@ -342,7 +363,8 @@ The manual runbook must let an operator:
 5. remove network/volume resources;
 6. reconcile GitHub branch/commit/PR intent;
 7. record cleanup evidence and move `cleanup_failed → destroying → destroyed`;
-8. return the cycle to `awaiting_review`, `cancelled`, or keep `recovery_required` with rationale.
+8. return the cycle to `awaiting_review`, `cancelled`, or keep `recovery_required` with rationale;
+9. where failure recovery is explicitly authorised, record the immutable recovery decision and release exact claims with `authorised_failure_recovery` in the same state/audit/outbox transaction.
 
 Manual recovery cannot mark work completed or issue new authority.
 
@@ -375,4 +397,6 @@ runner-recovery cleanup --cycle-id <uuid> --environment-id <immutable-provider-i
 
 ## Evaluation strategy
 
-Each use case has representative fixtures and assertions for schema validity, source-ID validity, omission, unsupported certainty, origin, conflict handling, refusal, cost/latency, and human edit burden. Prompt/model changes do not ship when they regress mandatory assertions. Codex runner evaluation additionally measures scope denials, stopping accuracy, test/report completeness, and duplicate-side-effect prevention.
+Each use case has representative fixtures and assertions for schema validity, source-ID validity, omission, unsupported certainty, origin, conflict handling, refusal, cost/latency, and human edit burden. Prompt/model changes do not ship when they regress mandatory assertions. Codex runner evaluation additionally measures scope denials, stopping accuracy, test/report completeness, active-claim races/retention, and duplicate-side-effect prevention.
+
+The demonstration comparison uses a versioned scoring method and deterministic expected fixtures. It reports both raw counts and attributable examples for unsupported assumptions, missing questions/requirements/criteria, corrections, coverage, confidence, and traceability; it never manufactures a favourable platform score. `pnpm docs:validate` verifies that all AI/runner table, state, enum, requirement, backlog, and demo references used here match the canonical planning sources.

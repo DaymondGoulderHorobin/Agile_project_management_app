@@ -11,6 +11,8 @@ Quality model: invariants and complete user journeys over shallow coverage perce
 - Verify the runner fails closed across every authority, scope, limit, crash, and cleanup path.
 - Demonstrate usability for a non-technical guest on desktop/mobile with assistive technology.
 - Prove self-host install, migration, backup, restore, upgrade, export, and deletion.
+- Prove the planning specification remains internally consistent through one repeatable local/CI documentation-validation command (`NFR-011`).
+- Reproduce a fair, immutable Direct-to-Codex versus platform-assisted comparison (`DEMO-001`).
 
 ## Test stack
 
@@ -18,6 +20,7 @@ Quality model: invariants and complete user journeys over shallow coverage perce
 - Testing Library for accessible React behaviour.
 - Testcontainers for the supported PostgreSQL, Redis, and MinIO/S3-compatible services.
 - Nest/Fastify injection plus real database for API integration.
+- Better Auth `1.6.23` official Fastify-handler contract tests with real Drizzle/PostgreSQL session storage; keep every Better Auth package on the same patch and do not use the community NestJS adapter or Better Auth organisation plugin as an application boundary.
 - Playwright for browser journeys, mobile viewports, keyboard, downloads, SSE, and multi-user sessions.
 - axe-core for automated accessibility; NVDA/VoiceOver or equivalent manual screen-reader scripts.
 - MSW or contract fixtures for frontend-only provider states; provider adapters have real sandbox smoke tests separately.
@@ -39,6 +42,7 @@ Fast, deterministic tests for:
 - readiness rules and explanations;
 - change classification precedence and impact graph units;
 - runner transition guards, capability scope, path/network rules, limit calculations;
+- active execution work-item claim acquisition/release eligibility and graceful-shutdown configuration bounds;
 - idempotency key derivation, retry classification, event redaction;
 - AI output/source validation and origin conversion;
 - release evidence completeness.
@@ -53,6 +57,7 @@ Use table-driven and property-based cases where useful:
 - no request is approved without all valid requirements;
 - AI/system/integration/operator actor cannot approve;
 - one execution-plan version maps to at most one cycle;
+- at most one active `execution_work_item_claims` row exists per `(organisation_id, work_item_id)` and a `recovery_required` cycle cannot silently release it;
 - no illegal cycle/environment transition;
 - no `completed` cycle without required test/review results;
 - highest matching change class wins;
@@ -65,7 +70,7 @@ Use table-driven and property-based cases where useful:
 - All PK/FK/unique/check/partial-index constraints.
 - Cross-tenant composite FK rejection.
 - RLS under the actual application database role.
-- `SELECT FOR UPDATE`, optimistic `lock_version`, unique cycle/idempotency races.
+- `SELECT FOR UPDATE`, optimistic `lock_version`, unique cycle/idempotency races, and simultaneous overlapping-work authorisation against the active-claim partial unique index.
 - Outbox claim with `SKIP LOCKED`, retry/dead-letter, and inbox dedupe.
 - Canonical hash fixtures across code and persisted payload.
 - Expand/backfill/switch/contract compatibility and interrupted backfill resume.
@@ -73,7 +78,7 @@ Use table-driven and property-based cases where useful:
 ### API contract tests
 
 - Generated OpenAPI matches Zod routes and versioned error/event schemas.
-- Authentication/authorisation on every operation.
+- Better Auth magic-link `storeToken: "hashed"`, passkey and TOTP sign-in/enrolment/recovery; database-backed session renewal/freshness, immediate revocation with cookie cache off, CSRF/trusted-origin handling, direct Fastify routing, internal-principal conversion, and application authorisation on every operation. Prove `updateAge` does not rotate the lookup token; recovery/privilege change revokes the old session and requires a new authentication. Treat the database session lookup token as a narrow sensitive-storage exception and assert it never appears in logs, exports, audit, telemetry or ordinary backups without encryption/access controls.
 - `Idempotency-Key` same request returns same result; changed body with same key rejects.
 - `ETag`/`If-Match` conflicts return `409` and preserve data.
 - Pagination/order/filter tenant safety.
@@ -102,8 +107,8 @@ These tests block every slice release and satisfy `SC-12`.
 
 - Light role aggregation satisfies multiple eligible requirements exactly once.
 - Standard/High-Assurance distinct-principal group rejects the same reviewer twice.
-- High-Assurance recent MFA/reauthentication expires correctly.
-- Decision on exact current snapshot succeeds; stale snapshot fails atomically.
+- High-Assurance creates a tenant-aware, one-use `reauthentication_grants` row only after passkey user verification; it is bound to principal, current session, action and exact subject/snapshot hash, expires within 15 minutes, rejects replay/wrong action/hash/session/tenant, and is consumed atomically with the protected decision. TOTP is tested only where the selected policy explicitly permits that fallback; passwordless sign-in is never assumed to have triggered it.
+- A decision on the exact snapshot referenced by a current approval request succeeds; a `stale` approval request fails atomically. The immutable snapshot and prior decisions remain unchanged historical evidence.
 - Concurrent final decisions produce one correct request state.
 - New relevant artifact version racing a decision leaves request stale, never falsely approved.
 - Conditions required/optional/resolved and approval-with-conditions calculation.
@@ -155,14 +160,14 @@ Prompt/model/schema changes run fixed fixtures and human-rated samples. Gate on 
 ### Happy path
 
 1. Approved execution-plan version creates one `requested` cycle.
-2. `authorising` locks/rechecks and commits queued/grant/audit/outbox.
+2. `authorising` locks/rechecks and atomically acquires every selected active work-item claim before committing queued/grant/audit/outbox. One conflicting active claim rolls the authorisation transaction back to `requested`; a separate idempotent denial transaction writes audit/outbox and proves there is no partial claim, capability or environment.
 3. Environment provisions exact repository/commit/branch/mount/network/tool/secret policy.
 4. Codex activity streams with ordered safe events and atomic usage.
 5. Planned checkpoint stops and revokes/suspends authority.
 6. Human continuation plus authority recheck resumes same cycle.
 7. Required tests run, report generated, commit/PR where permitted.
 8. Capability/secrets revoke, environment destroys, reviews requested.
-9. Required reviews allow `completed`; no earlier state displays complete.
+9. Required reviews allow `completed`, release all active claims with audit/outbox in the review-completion transaction, and no earlier state displays complete.
 
 ### Authority and scope failures
 
@@ -170,6 +175,7 @@ Prompt/model/schema changes run fixed fixtures and human-rated samples. Gate on 
 - Revocation appends invalidation evidence without rewriting the original decision/request result; a new approval request is required to regain authority.
 - Approval revoked after capability issuance but before `runner.start`: revoke, never start Codex, cancel, and clean up.
 - Approval/member authority lost after queue/provision/start/checkpoint: stop/cancel and preserve evidence.
+- Active claims remain held through `checkpoint_waiting`, `human_input_required`, `testing`, `reporting`, `awaiting_review`, and `recovery_required`; `released_at` may be set only with `required_review_completed`, `safely_cancelled`, `authorised_failure_recovery`, or `authorised_change_removed_work`.
 - Repository installation/access/base commit/branch protection change before/during run.
 - Affected material/fundamental change; unrelated change continues with audited impact result.
 - Normal path traversal, absolute path, symlink/junction escape, case/Unicode/alternate separator edge cases.
@@ -185,13 +191,15 @@ Prompt/model/schema changes run fixed fixtures and human-rated samples. Gate on 
 - Crash during provisioning/start retries up to three before side effects.
 - Crash after file/commit side effect preserves workspace/patch and enters `recovery_required`; no auto-rerun.
 - Cancellation at every active/suspended state; capability revoke precedes signal.
-- Graceful cancellation completes; timeout hard-kills after 30 seconds.
+- Graceful cancellation completes; timeout hard-kills after validated `runner_graceful_shutdown_seconds` (default 30). Configuration accepts 5 and 120, rejects values outside 5–120, and tests both just-before and at/after-deadline signal races.
 - Cleanup repeated when environment exists/already absent/partially removed.
 - Cleanup failure revokes secrets, raises alert, enters recovery; manual runbook returns to valid state.
+- Safe cancellation releases claims only after runner termination and cleanup reach the authorised cancellation terminal condition; cleanup/recovery ambiguity retains claims.
 
 ### Idempotency/external effects
 
 - Duplicate cycle request returns same cycle due unique execution-plan version.
+- Competing cycle versions selecting the same work item produce one authorisation winner and one safe claim conflict returned to `requested`; the denial has exactly one audit/outbox pair and no capability, runner, partial claim, audit gap, or duplicate effect.
 - Duplicate stage jobs do not provision twice.
 - Branch/commit/push/PR intent reconciles before retry; one PR maximum.
 - Duplicate/out-of-order runner events rejected or reconciled by sequence.
@@ -208,6 +216,8 @@ Every transition/failure produces expected state, stop reason, safe audit event,
 Automate `DJ-01`–`DJ-22` from [Demo Journey](13-demo-journey.md) using two browser contexts and real PostgreSQL/Redis/MinIO, stubbed/evaluated OpenAI where appropriate, GitHub test installation or faithful contract sandbox, and isolated demo runner.
 
 Verify problem → question → answer → evidence → requirement → plan approval → sprint → execution approval → Codex/checkpoint → tests → developer/stakeholder review → release trace.
+
+Run the controlled `DEMO-001` comparison from the same clean seed. Hold the original idea, synthetic fixture repository/base commit, model/profile, task limits and scoring rubric constant; persist an immutable Direct-to-Codex result before discovery and an immutable platform-assisted result after `DJ-22`. Assert the results screen/report exposes unsupported assumptions, missing requirements, unasked domain questions, missing acceptance criteria, stakeholder corrections, requirements discovered, assumptions prevented, acceptance-criterion coverage, correction count, stakeholder-confidence scores, and requirement-to-code-to-test traceability. The baseline is visibly an evaluation result, cannot be approved/released/merged, and cannot be mistaken for an authorised execution cycle.
 
 ### Additional journeys
 
@@ -243,6 +253,7 @@ At least five representative non-technical participants attempt secure invite, n
 - Stale approval visibly disabled with current-request link.
 - Only `completed` cycle uses completed language/styling.
 - Light mode hides advanced controls but never hides required evidence/decisions.
+- Demonstration comparison labels both cohorts, method, immutable input/result hashes and limitations; tables/charts have accessible text equivalents and never imply the baseline was approved work.
 
 ## Healthcare boundary tests
 
@@ -295,11 +306,28 @@ Exact latency/throughput SLOs are a Slice 1 launch-blocking product/operations d
 - Run the full demonstration and backup/restore smoke after a clean install and supported-version upgrade.
 - A single-host development/reduced-isolation layout does not satisfy production controlled-execution acceptance under `SC-14`.
 
+## Documentation validation gate
+
+`pnpm docs:validate` is the single repeatable local and CI entry point required by `NFR-011`. It must exit non-zero, identify the file/identifier/state involved, and have positive/negative fixture tests for:
+
+1. broken Markdown and local file links;
+2. Mermaid parse/render syntax where the CI renderer supports it, with balanced-fence validation always required;
+3. duplicate requirement IDs and duplicate backlog IDs;
+4. missing requirement references and missing demo-step references;
+5. non-canonical project-workflow, execution-cycle and runner-environment state names;
+6. non-canonical approval decisions, approval-request states, stop reasons, origin labels and other dossier-owned enum values;
+7. accidental wording that makes a Legal electronic signature an initial-release requirement, schema dependency, slice deliverable, demo gate or success condition;
+8. Markdown formatting errors and trailing whitespace.
+
+The command scans the whole repository for documentation links while treating `docs/planning/` as the authority for dossier identifiers and canonical vocabularies. The CI workflow runs it on every pull request and protected-branch update; bypass requires the same documented exception process as another blocking integrity test. CI configuration calls the repository command rather than embedding a divergent checker.
+
 ## Definition of test completion
 
 - All introduced requirement IDs have automated or documented manual evidence.
 - All runner failure-matrix rows are automated where technically possible and manually rehearsed otherwise.
 - Full demo passes from clean seed and supported upgrade state.
+- The immutable `DEMO-001` baseline comparison passes fairness, completeness, accessible-presentation and no-authority-confusion assertions.
 - Tenant isolation, approval integrity, healthcare boundary, and no-false-completion suites are blocking.
+- `pnpm docs:validate` passes locally and in CI, including its deliberate failure fixtures.
 - Flaky tests are quarantined only with owner/issue/deadline and cannot cover a blocking invariant.
 - Test evidence links into slice/release records and is understandable to technical and stakeholder reviewers.
